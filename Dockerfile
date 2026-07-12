@@ -1,6 +1,6 @@
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
 
-LABEL org.opencontainers.image.source=https://github.com/PACT-Precision-Ag-Climate-Telemetry/ingestion
+LABEL org.opencontainers.image.source https://github.com/PACT-Precision-Ag-Climate-Telemetry/ingestion
 
 WORKDIR /src
 
