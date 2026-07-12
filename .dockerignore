@@ -1,0 +1,10 @@
+.git
+.gitignore
+Dockerfile
+.DS_Store
+*.exe
+*.test
+*.out
+.env
+build.go
+test.py
