@@ -1,14 +1,16 @@
 # Ingest Service
 
-TCP ingestion service for AgriCarbon telemetry. It accepts a 54-byte binary payload over TCP, parses the sensor fields, prints the parsed data, publishes the parsed JSON to RabbitMQ exchange `pact.telemetry.json`, and forwards failures to `error_handler_queue`.
+TCP ingestion service for AgriCarbon telemetry. It accepts a variable-length binary payload over TCP, parses sensor readings, publishes parsed JSON to RabbitMQ, and forwards failures to `error_handler_queue`.
 
 ## What it does
 
 - Listens on TCP port `8080`
-- Parses the fixed telemetry payload format used by the device
-- Publishes parsed telemetry as JSON to `pact.telemetry.json`
+- Parses the current variable-length telemetry payload format used by the device
+- Publishes parsed telemetry as JSON to exchange `pact.telemetry` (type `topic`)
+- Uses routing key pattern `pact.telemetry.<version-major>.<device-id>`
 - Uses RabbitMQ publisher confirms for the JSON publish path
 - Publishes parse and transport errors to `error_handler_queue`
+- Rejects unsupported major versions (`version_major != 1`) and logs them through the error path
 
 ## Requirements
 
@@ -26,6 +28,14 @@ The service reads these values from `.env` or the process environment:
 - `RABBITMQ_QUEUE` - queue consumed by the RabbitMQ consumer
 - `TCP_HOST` - optional host for the local sender script
 - `TCP_PORT` - optional port for the local sender script
+
+RabbitMQ queues created/used by the service:
+
+- `RABBITMQ_QUEUE` - ingest queue consumed by this service
+- `failed_messages_queue` - dead-letter target for rejected messages (when DLX args are present)
+- `error_handler_queue` - stores error JSON emitted by the service
+
+Note on existing queues: if `RABBITMQ_QUEUE` already exists, the service keeps existing queue arguments as-is and does not force dead-letter arguments.
 
 Example `.env`:
 
@@ -73,31 +83,64 @@ python test.py --host 127.0.0.1 --port 8080 --device-id ABCDEF1234 --timestamp 1
 
 The script prints the payload hex and the server response.
 
+To test version validation (server accepts only major version 1):
+
+```bash
+python test.py --version-major 2
+```
+
 ## Payload Layout
 
-The TCP payload is 54 bytes total:
+The TCP payload is variable length and has this structure:
 
-- 2 bytes magic
-- 10 bytes device ID
-- 3 bytes version
-- 8 bytes timestamp
-- 4 bytes latitude
-- 4 bytes longitude
-- 2 bytes carbon dioxide
-- 2 bytes methane raw
-- 2 bytes methane
-- 2 bytes level
-- 2 bytes distance
-- 2 bytes moisture raw
-- 2 bytes moisture
-- 2 bytes mobile country code
-- 2 bytes mobile network code
-- 4 bytes uptime
-- 1 byte error code
+1. Header (17 bytes)
+2. `count` records (oldest to newest)
+3. Optional GPS block (8 bytes when flag bit 0 is set)
+4. Optional Cell block (4 bytes when flag bit 1 is set)
+
+### Header (17 bytes)
+
+- Byte 0-1: magic bytes
+- Byte 2: version major
+- Byte 3: version minor
+- Byte 4: version patch
+- Byte 5-14: device ID (10 bytes)
+- Byte 15: flags
+- Byte 16: record count
+
+### Records
+
+- Older records (`count-1` entries): 22 bytes each
+  - timedif (2 bytes) + fixed sensor/body fields (20 bytes)
+- Newest record (last entry): 28 bytes
+  - absolute timestamp (8 bytes) + fixed sensor/body fields (20 bytes)
+
+### Size formula
+
+`total = 17 + (22 * (count - 1)) + 28 + gps + cell`
+
+Where:
+
+- `gps = 8` if GPS flag is set, else `0`
+- `cell = 4` if Cell flag is set, else `0`
+
+For a deeper byte-by-byte guide, see `telemetry.md`.
+
+## RabbitMQ Publish
+
+- JSON exchange: `pact.telemetry` (type `topic`, durable)
+- Routing key: `pact.telemetry.<version-major>.<device-id>`
+- Content type: `application/json`
+- Delivery mode: persistent
+- Publish confirmation: required (publisher confirm)
+
+See `rabbitmq.md` for full queue topology, dead-letter behavior, and message schemas.
 
 ## Repository Files
 
 - `main.go` - TCP server and RabbitMQ integration
 - `test.py` - sample TCP payload sender
+- `telemetry.md` - byte-level payload construction guide
+- `rabbitmq.md` - RabbitMQ topology, routing, and error/dead-letter details
 - `Dockerfile` - container build
 - `.dockerignore` - excludes local-only files from the Docker build context
