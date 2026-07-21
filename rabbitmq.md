@@ -226,3 +226,56 @@ The service builds the JSON body using string formatting:
 - Error consumer should consume from `error_handler_queue`.
 - Failed-message consumer/alerts should monitor `failed_messages_queue`.
 - For binary payload forensics, decode `payload` carefully because it is a lossy string representation of bytes.
+
+## Least-Privilege RabbitMQ Permissions
+
+Grant only the permissions this service needs.
+
+### Resources used by this service
+
+- Exchange: `pact.telemetry`
+- Queue: `RABBITMQ_QUEUE` (ingest queue consumed by this service)
+- Queue: `failed_messages_queue`
+- Queue: `error_handler_queue`
+- Default exchange: `""` (used when publishing directly to `error_handler_queue`)
+
+### Required permissions by operation
+
+- Configure:
+  - `pact.telemetry` (exchange declare)
+  - `RABBITMQ_QUEUE` (passive declare check and optional declare)
+  - `failed_messages_queue` (declare)
+  - `error_handler_queue` (declare)
+- Write:
+  - `pact.telemetry` (telemetry publish)
+  - default exchange `""` (error publish to `error_handler_queue`)
+- Read:
+  - `RABBITMQ_QUEUE` (consume + ack/reject)
+
+### Example ACL regexes
+
+Replace `pact_ingest` with your real ingest queue name.
+
+- Configure regex:
+
+```text
+^pact\.telemetry$|^pact_ingest$|^failed_messages_queue$|^error_handler_queue$
+```
+
+- Write regex:
+
+```text
+^pact\.telemetry$|^amq\.default$|^$
+```
+
+- Read regex:
+
+```text
+^pact_ingest$
+```
+
+### Example command
+
+```bash
+rabbitmqctl set_permissions -p / ingest_user "^pact\\.telemetry$|^pact_ingest$|^failed_messages_queue$|^error_handler_queue$" "^pact\\.telemetry$|^amq\\.default$|^$" "^pact_ingest$"
+```
