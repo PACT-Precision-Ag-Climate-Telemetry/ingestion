@@ -45,7 +45,7 @@ const newestRecordSize = 8 + recordFixedSize // 28 bytes
 const gpsBlockSize = 8  // 4-byte latitude + 4-byte longitude
 const cellBlockSize = 4 // 2-byte MCC + 2-byte MNC
 
-const telemetryJSONExchange = "pact.telemetry"
+const defaultTelemetryJSONExchange = "pact.telemetry"
 
 // Flag bit assignments within the header flags byte.
 // NOTE: bit positions are an assumption based on the protocol diagram
@@ -577,10 +577,12 @@ func (s *Server) publishRabbitMQJSON(ctx context.Context, data *TelemetryData) e
 		return fmt.Errorf("telemetry data is nil")
 	}
 
+	exchangeName := telemetryJSONExchangeName()
+
 	s.rabbitPublishLock.Lock()
 	defer s.rabbitPublishLock.Unlock()
 
-	if err := s.ensureJSONExchangeLocked(telemetryJSONExchange); err != nil {
+	if err := s.ensureJSONExchangeLocked(exchangeName); err != nil {
 		return err
 	}
 
@@ -593,7 +595,7 @@ func (s *Server) publishRabbitMQJSON(ctx context.Context, data *TelemetryData) e
 
 	if err := s.rabbitJSONCh.PublishWithContext(
 		ctx,
-		telemetryJSONExchange,
+		exchangeName,
 		routingKey,
 		false,
 		false,
@@ -624,6 +626,15 @@ func (s *Server) publishRabbitMQJSON(ctx context.Context, data *TelemetryData) e
 		return ctx.Err()
 	}
 
+}
+
+func telemetryJSONExchangeName() string {
+	name := strings.TrimSpace(os.Getenv("RABBITMQ_TELEMETRY_EXCHANGE"))
+	if name == "" {
+		return defaultTelemetryJSONExchange
+	}
+
+	return name
 }
 
 func telemetryRoutingKey(deviceID, version string) string {

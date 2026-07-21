@@ -18,7 +18,7 @@ The service publishes two kinds of messages:
 - Channel: `rabbitJSONCh`
 - Exchange type: `topic`
 - Exchange durability: `durable=true`
-- Exchange name: `pact.telemetry`
+- Exchange name: `RABBITMQ_TELEMETRY_EXCHANGE` (default `pact.telemetry`)
 - Routing key pattern: `pact.telemetry.{version-major}.{device-id}`
 - Content type: `application/json`
 - Delivery mode: persistent
@@ -233,7 +233,7 @@ Grant only the permissions this service needs.
 
 ### Resources used by this service
 
-- Exchange: `pact.telemetry`
+- Exchange: `RABBITMQ_TELEMETRY_EXCHANGE` (or `pact.telemetry` when unset)
 - Queue: `RABBITMQ_QUEUE` (ingest queue consumed by this service)
 - Queue: `failed_messages_queue`
 - Queue: `error_handler_queue`
@@ -242,12 +242,12 @@ Grant only the permissions this service needs.
 ### Required permissions by operation
 
 - Configure:
-  - `pact.telemetry` (exchange declare)
+  - `RABBITMQ_TELEMETRY_EXCHANGE` (exchange declare)
   - `RABBITMQ_QUEUE` (passive declare check and optional declare)
   - `failed_messages_queue` (declare)
   - `error_handler_queue` (declare)
 - Write:
-  - `pact.telemetry` (telemetry publish)
+  - `RABBITMQ_TELEMETRY_EXCHANGE` (telemetry publish)
   - default exchange `""` (error publish to `error_handler_queue`)
 - Read:
   - `RABBITMQ_QUEUE` (consume + ack/reject)

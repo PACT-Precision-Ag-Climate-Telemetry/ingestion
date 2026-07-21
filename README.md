@@ -26,6 +26,7 @@ The service reads these values from `.env` or the process environment:
 - `magic_byte_2` - second payload magic byte, for example `0x2B`
 - `RABBITMQ_URL` - RabbitMQ connection URL
 - `RABBITMQ_QUEUE` - queue consumed by the RabbitMQ consumer
+- `RABBITMQ_TELEMETRY_EXCHANGE` - optional telemetry JSON exchange name (default: `pact.telemetry`)
 - `TCP_HOST` - optional host for the local sender script
 - `TCP_PORT` - optional port for the local sender script
 
@@ -44,6 +45,7 @@ magic_byte_1=0x1A
 magic_byte_2=0x2B
 RABBITMQ_URL=amqp://username:password@ip:port/
 RABBITMQ_QUEUE=pact_telemetry
+RABBITMQ_TELEMETRY_EXCHANGE=pact.telemetry
 ```
 
 ## Run
@@ -128,7 +130,7 @@ For a deeper byte-by-byte guide, see `telemetry.md`.
 
 ## RabbitMQ Publish
 
-- JSON exchange: `pact.telemetry` (type `topic`, durable)
+- JSON exchange: `RABBITMQ_TELEMETRY_EXCHANGE` (default `pact.telemetry`, type `topic`, durable)
 - Routing key: `pact.telemetry.<version-major>.<device-id>`
 - Content type: `application/json`
 - Delivery mode: persistent
