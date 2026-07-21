@@ -1,11 +1,12 @@
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
 
-LABEL org.opencontainers.image.source https://github.com/PACT-Precision-Ag-Climate-Telemetry/ingestion
-
 WORKDIR /src
 
-COPY go.mod go.sum ./
+# Install CA certificates and create a non-root user
+RUN apk add --no-cache ca-certificates && \
+    adduser -D -g '' appuser
 
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY main.go ./
@@ -15,13 +16,20 @@ ARG TARGETARCH
 
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/ingest .
 
-FROM alpine:3.20
+# Use scratch (an entirely empty image) for the runtime
+FROM scratch
 
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates
+# Copy certificates and user data from builder
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /etc/passwd /etc/passwd
 
+# Copy the static binary
 COPY --from=builder /out/ingest /usr/local/bin/ingest
+
+# Switch to the non-root user
+USER appuser
 
 EXPOSE 8080
 
