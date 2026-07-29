@@ -32,7 +32,7 @@ import (
 const headerSize = 17
 
 // Per-record fixed portion (everything except the leading time field):
-// CO2, ch4_raw, ch4_ppm, level, distance, moisture_raw, moisture_pct,
+// CO2, ch4_raw, ch4_ppm, offset, distance, moisture_raw, moisture_pct,
 // batt_v, batt_p (uint16 each = 18 bytes) + status + error (1 byte each) = 20 bytes.
 const recordFixedSize = 20
 
@@ -62,7 +62,7 @@ type TelemetryReading struct {
 	CarbonDioxide     uint16 `json:"carbon_dioxide"`
 	MethaneRaw        uint16 `json:"methane_raw"`
 	Methane           uint16 `json:"methane"`
-	Level             uint16 `json:"level"`
+	Offset            uint16 `json:"offset"`
 	Distance          uint16 `json:"distance"`
 	MoistureRaw       uint16 `json:"moisture_raw"`
 	Moisture          uint16 `json:"moisture"`
@@ -441,7 +441,7 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 		co2         uint16
 		ch4Raw      uint16
 		ch4Ppm      uint16
-		level       uint16
+		offset      uint16
 		distance    uint16
 		moistureRaw uint16
 		moisturePct uint16
@@ -451,7 +451,7 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 		errorCode   byte
 	}
 
-	offset := headerSize
+	bytesOffset := headerSize
 	rawRecords := make([]rawRecord, 0, count)
 	for i := 0; i < count; i++ {
 		isNewest := i == count-1
@@ -459,35 +459,35 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 		var timedif uint16
 		var timestamp uint64
 		if isNewest {
-			timestamp = binary.LittleEndian.Uint64(payload[offset : offset+8])
-			offset += 8
+			timestamp = binary.LittleEndian.Uint64(payload[bytesOffset : bytesOffset+8])
+			bytesOffset += 8
 		} else {
-			timedif = binary.LittleEndian.Uint16(payload[offset : offset+2])
-			offset += 2
+			timedif = binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+			bytesOffset += 2
 		}
 
-		co2 := binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
-		ch4Raw := binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
-		ch4Ppm := binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
-		level := binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
-		distance := binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
-		moistureRaw := binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
-		moisturePct := binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
-		battV := binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
-		battP := binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
-		status := payload[offset]
-		offset++
-		errorCode := payload[offset]
-		offset++
+		co2 := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		ch4Raw := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		ch4Ppm := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		offset := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		distance := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		moistureRaw := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		moisturePct := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		battV := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		battP := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		status := payload[bytesOffset]
+		bytesOffset++
+		errorCode := payload[bytesOffset]
+		bytesOffset++
 
 		rawRecords = append(rawRecords, rawRecord{
 			isNewest:    isNewest,
@@ -496,7 +496,7 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 			co2:         co2,
 			ch4Raw:      ch4Raw,
 			ch4Ppm:      ch4Ppm,
-			level:       level,
+			offset:      offset,
 			distance:    distance,
 			moistureRaw: moistureRaw,
 			moisturePct: moisturePct,
@@ -528,7 +528,7 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 			CarbonDioxide:     r.co2,
 			MethaneRaw:        r.ch4Raw,
 			Methane:           r.ch4Ppm,
-			Level:             r.level,
+			Offset:            r.offset,
 			Distance:          r.distance,
 			MoistureRaw:       r.moistureRaw,
 			Moisture:          r.moisturePct,
@@ -549,19 +549,19 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 	}
 
 	if hasGPS {
-		latBits := binary.LittleEndian.Uint32(payload[offset : offset+4])
-		offset += 4
-		lonBits := binary.LittleEndian.Uint32(payload[offset : offset+4])
-		offset += 4
+		latBits := binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4])
+		bytesOffset += 4
+		lonBits := binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4])
+		bytesOffset += 4
 		data.Latitude = math.Float32frombits(latBits)
 		data.Longitude = math.Float32frombits(lonBits)
 	}
 
 	if hasCell {
-		data.MobileCountryCode = binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
-		data.MobileNetworkCode = binary.LittleEndian.Uint16(payload[offset : offset+2])
-		offset += 2
+		data.MobileCountryCode = binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		data.MobileNetworkCode = binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
 	}
 
 	fmt.Printf("Parsed Data: %+v\n", data)
