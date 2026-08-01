@@ -34,7 +34,7 @@ Routing keys are generated from parsed telemetry ID and payload version:
 - Allowed characters preserved in `{device-id}`: `A-Z`, `a-z`, `0-9`, `-`, `_`, `.`
 - Any other character is replaced with `-`
 - Empty/blank device id becomes `unknown`
-- `{version-major}` is derived from `version` (`major.minor.patch`) by taking the first segment before `.`
+- `{version-major}` is derived from `version`; the current parser emits a single numeric string such as `0`
 - Allowed characters preserved in `{version-major}`: `A-Z`, `a-z`, `0-9`, `-`, `_`, `.`
 - Any other character in `{version-major}` is replaced with `-`
 - Empty/blank version major becomes `0`
@@ -42,8 +42,8 @@ Routing keys are generated from parsed telemetry ID and payload version:
 Example:
 
 - Device ID: `ABC-DEF-1234`
-- Version: `2.7.1`
-- Routing key: `pact.telemetry.2.ABC-DEF-1234`
+- Version: `0`
+- Routing key: `pact.telemetry.0.ABC-DEF-1234`
 
 ### Telemetry JSON Schema (Draft 2020-12)
 
@@ -62,8 +62,8 @@ Example:
     },
     "version": {
       "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
-      "description": "major.minor.patch from payload header"
+      "pattern": "^[0-9]+$",
+      "description": "version nibble from the payload flag byte"
     },
     "flags": {
       "type": "integer",
@@ -78,10 +78,14 @@ Example:
         "additionalProperties": false,
         "required": [
           "timestamp",
+          "timedif",
+          "temperature",
+          "humidity",
+          "pressure",
           "carbon_dioxide",
           "methane_raw",
           "methane",
-          "level",
+          "offset",
           "distance",
           "moisture_raw",
           "moisture",
@@ -92,6 +96,10 @@ Example:
         ],
         "properties": {
           "timestamp": { "type": "integer", "minimum": 0 },
+          "timedif": { "type": "integer", "minimum": 0, "maximum": 65535 },
+          "temperature": { "type": "number" },
+          "humidity": { "type": "number" },
+          "pressure": { "type": "number" },
           "carbon_dioxide": {
             "type": "integer",
             "minimum": 0,
@@ -99,19 +107,18 @@ Example:
           },
           "methane_raw": { "type": "integer", "minimum": 0, "maximum": 65535 },
           "methane": { "type": "integer", "minimum": 0, "maximum": 65535 },
-          "level": { "type": "integer", "minimum": 0, "maximum": 65535 },
+          "offset": { "type": "integer", "minimum": 0, "maximum": 65535 },
           "distance": { "type": "integer", "minimum": 0, "maximum": 65535 },
           "moisture_raw": { "type": "integer", "minimum": 0, "maximum": 65535 },
-          "moisture": { "type": "integer", "minimum": 0, "maximum": 65535 },
+          "moisture": { "type": "number", "minimum": 0 },
           "battery_voltage": {
             "type": "integer",
             "minimum": 0,
             "maximum": 65535
           },
           "battery_percentage": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 65535
+            "type": "number",
+            "minimum": 0
           },
           "status": { "type": "integer", "minimum": 0, "maximum": 255 },
           "error_code": { "type": "integer", "minimum": 0, "maximum": 255 }

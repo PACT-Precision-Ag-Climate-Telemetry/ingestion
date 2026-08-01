@@ -21,25 +21,23 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// Header layout (17 bytes):
+// Header layout (14 bytes):
 //   0-1   magic bytes
-//   2     version major
-//   3     version minor
-//   4     version patch
-//   5-14  ID (10 bytes)
-//   15    flags
-//   16    record count
-const headerSize = 17
+//   2     flags/version
+//   3-12  ID (10 bytes)
+//   13    record count
+const headerSize = 14
 
-// Per-record fixed portion (everything except the leading time field):
-// CO2, ch4_raw, ch4_ppm, offset, distance, moisture_raw, moisture_pct,
-// batt_v, batt_p (uint16 each = 18 bytes) + status + error (1 byte each) = 20 bytes.
-const recordFixedSize = 20
+// Shared per-record sensor payload:
+// temp, humid, pressure (float32 each = 12 bytes), ch4_ppm, co2, offset,
+// distance, moisture_pct, batt_p, batt_v, ch4_raw, moisture_raw (uint16
+// each = 18 bytes), status + error (1 byte each = 2 bytes) => 32 bytes.
+const recordSensorSize = 32
 
-// Older records are prefixed with a 2-byte timedif; the newest record is
-// prefixed with a full 8-byte absolute timestamp instead.
-const oldRecordSize = 2 + recordFixedSize // 22 bytes
-const newestRecordSize = 8 + recordFixedSize // 28 bytes
+// Historical records carry timedif + sensor payload; the newest record adds
+// an absolute timestamp while still carrying the timedif field.
+const historicalRecordSize = 2 + recordSensorSize  // 34 bytes
+const newestRecordBaseSize = 2 + 8 + recordSensorSize // 42 bytes
 
 // Optional trailing blocks, gated by bits in the header flags byte.
 const gpsBlockSize = 8  // 4-byte latitude + 4-byte longitude
@@ -47,29 +45,31 @@ const cellBlockSize = 4 // 2-byte MCC + 2-byte MNC
 
 const defaultTelemetryJSONExchange = "pact.telemetry"
 
-// Flag bit assignments within the header flags byte.
-// NOTE: bit positions are an assumption based on the protocol diagram
-// ("v0 w/GPS w/Batt") - adjust here if the device firmware disagrees.
 const (
-	FlagGPSPresent  byte = 1 << 0
-	FlagCellPresent byte = 1 << 1
+	flagVersionMask byte = 0x0F
+	FlagCellPresent byte = 1 << 6
+	FlagGPSPresent  byte = 1 << 7
 )
 
 // TelemetryReading is a single sample within a telemetry payload. Payloads
 // carry multiple readings (oldest to newest) in one message.
 type TelemetryReading struct {
-	Timestamp         uint64 `json:"timestamp"`
-	CarbonDioxide     uint16 `json:"carbon_dioxide"`
-	MethaneRaw        uint16 `json:"methane_raw"`
-	Methane           uint16 `json:"methane"`
-	Offset            uint16 `json:"offset"`
-	Distance          uint16 `json:"distance"`
-	MoistureRaw       uint16 `json:"moisture_raw"`
-	Moisture          uint16 `json:"moisture"`
-	BatteryVoltage    uint16 `json:"battery_voltage"`
-	BatteryPercentage uint16 `json:"battery_percentage"`
-	Status            byte   `json:"status"`
-	ErrorCode         byte   `json:"error_code"`
+	Timestamp         uint64  `json:"timestamp"`
+	TimeDifference    uint16  `json:"timedif"`
+	Temperature       float64 `json:"temperature"`
+	Humidity          float64 `json:"humidity"`
+	Pressure          float64 `json:"pressure"`
+	CarbonDioxide     uint16  `json:"carbon_dioxide"`
+	MethaneRaw        uint16  `json:"methane_raw"`
+	Methane           uint16  `json:"methane"`
+	Offset            uint16  `json:"offset"`
+	Distance          uint16  `json:"distance"`
+	MoistureRaw       uint16  `json:"moisture_raw"`
+	Moisture          float64 `json:"moisture"`
+	BatteryVoltage    uint16  `json:"battery_voltage"`
+	BatteryPercentage float64 `json:"battery_percentage"`
+	Status            byte    `json:"status"`
+	ErrorCode         byte    `json:"error_code"`
 }
 
 type TelemetryData struct {
@@ -78,8 +78,8 @@ type TelemetryData struct {
 	Flags             byte               `json:"flags"`
 	Readings          []TelemetryReading `json:"readings"` // oldest to newest
 	HasGPS            bool               `json:"has_gps"`
-	Latitude          float32            `json:"latitude,omitempty"`
-	Longitude         float32            `json:"longitude,omitempty"`
+	Latitude          float64            `json:"latitude,omitempty"`
+	Longitude         float64            `json:"longitude,omitempty"`
 	HasCell           bool               `json:"has_cell"`
 	MobileCountryCode uint16             `json:"mobile_country_code,omitempty"`
 	MobileNetworkCode uint16             `json:"mobile_network_code,omitempty"`
@@ -309,8 +309,8 @@ func readTelemetryMessage(reader io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("reading header: %w", err)
 	}
 
-	flags := header[15]
-	count := int(header[16])
+	flags := header[2]
+	count := int(header[13])
 	if count == 0 {
 		return nil, fmt.Errorf("record count is zero")
 	}
@@ -327,13 +327,9 @@ func readTelemetryMessage(reader io.Reader) ([]byte, error) {
 // expectedRemainingSize returns the number of bytes that follow the header
 // for a payload with the given record count and flags.
 func expectedRemainingSize(count int, flags byte) int {
-	size := 0
-	for i := 0; i < count; i++ {
-		if i == count-1 {
-			size += newestRecordSize
-		} else {
-			size += oldRecordSize
-		}
+	size := newestRecordBaseSize
+	if count > 1 {
+		size += (count - 1) * historicalRecordSize
 	}
 	if flags&FlagGPSPresent != 0 {
 		size += gpsBlockSize
@@ -408,20 +404,18 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 		return nil, fmt.Errorf("invalid magic bytes: %x", payload[:2])
 	}
 
-	versionMajor := payload[2]
-	versionMinor := payload[3]
-	versionPatch := payload[4]
-	if versionMajor != 1 {
-		return nil, fmt.Errorf("unsupported version major: %d", versionMajor)
+	flags := payload[2]
+	version := int(flags & flagVersionMask)
+	if version != 0 {
+		return nil, fmt.Errorf("unsupported version: %d", version)
 	}
 
-	rawId := payload[5:15]
+	rawId := payload[3:13]
 	id := fmt.Sprintf("%c%c%c-%c%c%c-%c%c%c%c", rawId[0], rawId[1], rawId[2], rawId[3], rawId[4], rawId[5], rawId[6], rawId[7], rawId[8], rawId[9])
 
-	version := fmt.Sprintf("%d.%d.%d", versionMajor, versionMinor, versionPatch)
+	versionText := strconv.Itoa(version)
 
-	flags := payload[15]
-	count := int(payload[16])
+	count := int(payload[13])
 	if count == 0 {
 		return nil, fmt.Errorf("record count is zero")
 	}
@@ -430,23 +424,25 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 	hasCell := flags&FlagCellPresent != 0
 
 	expectedSize := headerSize + expectedRemainingSize(count, flags)
-	if len(payload) < expectedSize {
-		return nil, fmt.Errorf("payload too short: received %d bytes, need %d for count=%d flags=0x%02x", len(payload), expectedSize, count, flags)
+	if len(payload) != expectedSize {
+		return nil, fmt.Errorf("payload size mismatch: received %d bytes, need %d for count=%d flags=0x%02x", len(payload), expectedSize, count, flags)
 	}
 
 	type rawRecord struct {
-		isNewest    bool
 		timedif     uint16
 		timestamp   uint64
-		co2         uint16
-		ch4Raw      uint16
+		temp        float64
+		humid       float64
+		pressure    float64
 		ch4Ppm      uint16
+		co2         uint16
 		offset      uint16
 		distance    uint16
-		moistureRaw uint16
 		moisturePct uint16
-		battV       uint16
 		battP       uint16
+		battV       uint16
+		ch4Raw      uint16
+		moistureRaw uint16
 		status      byte
 		errorCode   byte
 	}
@@ -456,33 +452,38 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 	for i := 0; i < count; i++ {
 		isNewest := i == count-1
 
-		var timedif uint16
+		timedif := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+
 		var timestamp uint64
 		if isNewest {
 			timestamp = binary.LittleEndian.Uint64(payload[bytesOffset : bytesOffset+8])
 			bytesOffset += 8
-		} else {
-			timedif = binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-			bytesOffset += 2
 		}
 
-		co2 := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		ch4Raw := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
+		temp := float64(math.Float32frombits(binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4])))
+		bytesOffset += 4
+		humid := float64(math.Float32frombits(binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4])))
+		bytesOffset += 4
+		pressure := float64(math.Float32frombits(binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4])))
+		bytesOffset += 4
 		ch4Ppm := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		co2 := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
 		bytesOffset += 2
 		offset := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
 		bytesOffset += 2
 		distance := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
 		bytesOffset += 2
-		moistureRaw := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
 		moisturePct := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		battP := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
 		bytesOffset += 2
 		battV := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
 		bytesOffset += 2
-		battP := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		ch4Raw := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		bytesOffset += 2
+		moistureRaw := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
 		bytesOffset += 2
 		status := payload[bytesOffset]
 		bytesOffset++
@@ -490,50 +491,53 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 		bytesOffset++
 
 		rawRecords = append(rawRecords, rawRecord{
-			isNewest:    isNewest,
 			timedif:     timedif,
 			timestamp:   timestamp,
+			temp:        temp,
+			humid:       humid,
+			pressure:    pressure,
+			ch4Ppm:      ch4Ppm,
 			co2:         co2,
 			ch4Raw:      ch4Raw,
-			ch4Ppm:      ch4Ppm,
 			offset:      offset,
 			distance:    distance,
 			moistureRaw: moistureRaw,
 			moisturePct: moisturePct,
-			battV:       battV,
 			battP:       battP,
+			battV:       battV,
 			status:      status,
 			errorCode:   errorCode,
 		})
 	}
 
-	// Records are stored oldest-to-newest. The newest record carries an
-	// absolute timestamp; every older record carries a timedif representing
-	// the gap to the *next* (newer) record. Walk backward from the newest
-	// timestamp, accumulating timedifs, to recover each record's timestamp.
 	newestTimestamp := rawRecords[count-1].timestamp
 	timestamps := make([]uint64, count)
 	timestamps[count-1] = newestTimestamp
 
-	var cumulative uint64
 	for i := count - 2; i >= 0; i-- {
-		cumulative += uint64(rawRecords[i].timedif)
-		timestamps[i] = newestTimestamp - cumulative
+		if uint64(rawRecords[i].timedif) > timestamps[i+1] {
+			return nil, fmt.Errorf("timedif underflows timestamp reconstruction at record %d", i)
+		}
+		timestamps[i] = timestamps[i+1] - uint64(rawRecords[i].timedif)
 	}
 
 	readings := make([]TelemetryReading, count)
 	for i, r := range rawRecords {
 		readings[i] = TelemetryReading{
 			Timestamp:         timestamps[i],
+			TimeDifference:    r.timedif,
+			Temperature:       r.temp,
+			Humidity:          r.humid,
+			Pressure:          r.pressure,
 			CarbonDioxide:     r.co2,
 			MethaneRaw:        r.ch4Raw,
 			Methane:           r.ch4Ppm,
 			Offset:            r.offset,
 			Distance:          r.distance,
 			MoistureRaw:       r.moistureRaw,
-			Moisture:          r.moisturePct,
+			Moisture:          float64(r.moisturePct) / 100,
 			BatteryVoltage:    r.battV,
-			BatteryPercentage: r.battP,
+			BatteryPercentage: float64(r.battP) / 100,
 			Status:            r.status,
 			ErrorCode:         r.errorCode,
 		}
@@ -541,7 +545,7 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 
 	data := &TelemetryData{
 		ID:       id,
-		Version:  version,
+		Version:  versionText,
 		Flags:    flags,
 		Readings: readings,
 		HasGPS:   hasGPS,
@@ -549,12 +553,12 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 	}
 
 	if hasGPS {
-		latBits := binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4])
+		lat := int32(binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4]))
 		bytesOffset += 4
-		lonBits := binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4])
+		lon := int32(binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4]))
 		bytesOffset += 4
-		data.Latitude = math.Float32frombits(latBits)
-		data.Longitude = math.Float32frombits(lonBits)
+		data.Latitude = float64(lat) / 10000000
+		data.Longitude = float64(lon) / 10000000
 	}
 
 	if hasCell {

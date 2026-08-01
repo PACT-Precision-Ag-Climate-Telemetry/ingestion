@@ -85,10 +85,10 @@ python test.py --host 127.0.0.1 --port 8080 --device-id ABCDEF1234 --timestamp 1
 
 The script prints the payload hex and the server response.
 
-To test version validation (server accepts only major version 1):
+To test version validation (server accepts only version `0` in the low nibble of the flag byte):
 
 ```bash
-python test.py --version-major 2
+python test.py --version 1
 ```
 
 ## Payload Layout
@@ -97,29 +97,32 @@ The TCP payload is variable length and has this structure:
 
 1. Header (17 bytes)
 2. `count` records (oldest to newest)
-3. Optional GPS block (8 bytes when flag bit 0 is set)
-4. Optional Cell block (4 bytes when flag bit 1 is set)
+3. Optional GPS block (8 bytes when flag bit 7 is set)
+4. Optional Cell block (4 bytes when flag bit 6 is set)
 
-### Header (17 bytes)
+### Header (14 bytes)
 
 - Byte 0-1: magic bytes
-- Byte 2: version major
-- Byte 3: version minor
-- Byte 4: version patch
-- Byte 5-14: device ID (10 bytes)
-- Byte 15: flags
-- Byte 16: record count
+- Byte 2: flags/version
+- Byte 3-12: device ID (10 bytes)
+- Byte 13: record count
+
+Flag/version byte layout:
+
+- Bit 0-3: version
+- Bit 6: cell block present
+- Bit 7: GPS block present
 
 ### Records
 
-- Older records (`count-1` entries): 22 bytes each
-  - timedif (2 bytes) + fixed sensor/body fields (20 bytes)
-- Newest record (last entry): 28 bytes
-  - absolute timestamp (8 bytes) + fixed sensor/body fields (20 bytes)
+- Historical records (`count-1` entries): 34 bytes each
+  - timedif (2 bytes) + environmental/sensor fields (32 bytes)
+- Newest record (last entry): 42 bytes before optional GPS/cell blocks
+  - timedif (2 bytes) + absolute timestamp (8 bytes) + environmental/sensor fields (32 bytes)
 
 ### Size formula
 
-`total = 17 + (22 * (count - 1)) + 28 + gps + cell`
+`total = 14 + (34 * (count - 1)) + 42 + gps + cell`
 
 Where:
 
