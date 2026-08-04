@@ -30,7 +30,7 @@ const headerSize = 14
 
 // Shared per-record sensor payload:
 // temp, humid, pressure (float32 each = 12 bytes), ch4_ppm, co2, offset,
-// distance, moisture_pct, batt_p, batt_v, ch4_raw, moisture_raw (uint16
+// depth, moisture_pct, batt_p, batt_v, ch4_raw, moisture_raw (uint16
 // each = 18 bytes), status + error (1 byte each = 2 bytes) => 32 bytes.
 const recordSensorSize = 32
 
@@ -63,7 +63,7 @@ type TelemetryReading struct {
 	MethaneRaw        uint16  `json:"methane_raw"`
 	Methane           uint16  `json:"methane"`
 	Offset            uint16  `json:"offset"`
-	Distance          uint16  `json:"distance"`
+	Depth             uint16  `json:"depth"`
 	MoistureRaw       uint16  `json:"moisture_raw"`
 	Moisture          float64 `json:"moisture"`
 	BatteryVoltage    uint16  `json:"battery_voltage"`
@@ -437,7 +437,7 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 		ch4Ppm      uint16
 		co2         uint16
 		offset      uint16
-		distance    uint16
+		depth       uint16
 		moisturePct uint16
 		battP       uint16
 		battV       uint16
@@ -473,7 +473,7 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 		bytesOffset += 2
 		offset := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
 		bytesOffset += 2
-		distance := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
+		depth := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
 		bytesOffset += 2
 		moisturePct := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
 		bytesOffset += 2
@@ -500,7 +500,7 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 			co2:         co2,
 			ch4Raw:      ch4Raw,
 			offset:      offset,
-			distance:    distance,
+			depth:   		 depth,
 			moistureRaw: moistureRaw,
 			moisturePct: moisturePct,
 			battP:       battP,
@@ -533,7 +533,7 @@ func parseTelemetryPayload(payload []byte) (*TelemetryData, error) {
 			MethaneRaw:        r.ch4Raw,
 			Methane:           r.ch4Ppm,
 			Offset:            r.offset,
-			Distance:          r.distance,
+			Depth:             r.depth,
 			MoistureRaw:       r.moistureRaw,
 			Moisture:          float64(r.moisturePct) / 100,
 			BatteryVoltage:    r.battV,
@@ -593,6 +593,7 @@ func (s *Server) publishRabbitMQJSON(ctx context.Context, data *TelemetryData) e
 	routingKey := telemetryRoutingKey(data.ID, data.Version)
 
 	payload, err := json.Marshal(data)
+	fmt.Printf("%s\n", string(payload))
 	if err != nil {
 		return err
 	}

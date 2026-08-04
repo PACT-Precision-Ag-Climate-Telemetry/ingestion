@@ -86,7 +86,7 @@ Example:
           "methane_raw",
           "methane",
           "offset",
-          "distance",
+          "depth",
           "moisture_raw",
           "moisture",
           "battery_voltage",
@@ -108,7 +108,7 @@ Example:
           "methane_raw": { "type": "integer", "minimum": 0, "maximum": 65535 },
           "methane": { "type": "integer", "minimum": 0, "maximum": 65535 },
           "offset": { "type": "integer", "minimum": 0, "maximum": 65535 },
-          "distance": { "type": "integer", "minimum": 0, "maximum": 65535 },
+          "depth": { "type": "integer", "minimum": 0, "maximum": 65535 },
           "moisture_raw": { "type": "integer", "minimum": 0, "maximum": 65535 },
           "moisture": { "type": "number", "minimum": 0 },
           "battery_voltage": {
