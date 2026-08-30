@@ -6,5 +6,6 @@ Dockerfile
 *.test
 *.out
 .env
-build.go
+tools/
 test.py
+**/*_test.go

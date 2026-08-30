@@ -9,12 +9,13 @@ RUN apk add --no-cache ca-certificates && \
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY main.go ./
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
 
 ARG TARGETOS
 ARG TARGETARCH
 
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/ingest .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/ingest ./cmd/ingest
 
 # Use scratch (an entirely empty image) for the runtime
 FROM scratch

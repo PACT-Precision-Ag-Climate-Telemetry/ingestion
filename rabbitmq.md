@@ -47,94 +47,68 @@ Example:
 
 ### Telemetry JSON Schema (Draft 2020-12)
 
+This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.schema.json), which is the canonical definition.
+
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pact.local/schemas/telemetry-data.json",
   "title": "TelemetryData",
+  "description": "Parsed telemetry published to the topic exchange RABBITMQ_TELEMETRY_EXCHANGE (default \"pact.telemetry\") with routing key pact.telemetry.{version-major}.{device-id}. Field order and units mirror buildTelemetryPayload() in the device firmware (tcp.h); firmware_parity_test.go enforces that.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "version", "flags", "readings", "has_gps", "has_cell"],
   "properties": {
     "id": {
       "type": "string",
-      "description": "Device ID formatted by parser as XXX-XXX-XXXX"
+      "pattern": "^.{3}-.{3}-.{4}$",
+      "description": "Device ID: the firmware's 10 raw bytes (up to 6 from DEVICE_MODEL with dashes stripped, then 4 from the short serial, zero-padded) formatted as XXX-XXX-XXXX"
     },
     "version": {
       "type": "string",
       "pattern": "^[0-9]+$",
-      "description": "version nibble from the payload flag byte"
+      "description": "Version nibble (bits 0-3) of the payload flags byte, rendered as a decimal string. Only \"0\" is accepted by the ingest service"
     },
     "flags": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 255
+      "maximum": 255,
+      "description": "Raw flags byte: bits 0-3 version, bits 4-5 reserved, bit 6 cell block present, bit 7 GPS block present"
     },
     "readings": {
       "type": "array",
       "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "timestamp",
-          "timedif",
-          "temperature",
-          "humidity",
-          "pressure",
-          "carbon_dioxide",
-          "methane_raw",
-          "methane",
-          "offset",
-          "depth",
-          "moisture_raw",
-          "moisture",
-          "battery_voltage",
-          "battery_percentage",
-          "status",
-          "error_code"
-        ],
-        "properties": {
-          "timestamp": { "type": "integer", "minimum": 0 },
-          "timedif": { "type": "integer", "minimum": 0, "maximum": 65535 },
-          "temperature": { "type": "number" },
-          "humidity": { "type": "number" },
-          "pressure": { "type": "number" },
-          "carbon_dioxide": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 65535
-          },
-          "methane_raw": { "type": "integer", "minimum": 0, "maximum": 65535 },
-          "methane": { "type": "integer", "minimum": 0, "maximum": 65535 },
-          "offset": { "type": "integer", "minimum": 0, "maximum": 65535 },
-          "depth": { "type": "integer", "minimum": 0, "maximum": 65535 },
-          "moisture_raw": { "type": "integer", "minimum": 0, "maximum": 65535 },
-          "moisture": { "type": "number", "minimum": 0 },
-          "battery_voltage": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 65535
-          },
-          "battery_percentage": {
-            "type": "number",
-            "minimum": 0
-          },
-          "status": { "type": "integer", "minimum": 0, "maximum": 255 },
-          "error_code": { "type": "integer", "minimum": 0, "maximum": 255 }
-        }
-      }
+      "maxItems": 255,
+      "description": "Sensor samples ordered oldest to newest. The firmware batches at most MAX_READINGS_PER_PAYLOAD (24) per message; the parser accepts up to the 255 the count byte allows",
+      "items": { "$ref": "#/$defs/reading" }
     },
-    "has_gps": { "type": "boolean" },
-    "latitude": { "type": "number" },
-    "longitude": { "type": "number" },
-    "has_cell": { "type": "boolean" },
-    "mobile_country_code": {
+    "has_gps": {
+      "type": "boolean",
+      "description": "True when the payload carried a GPS block (flags bit 7)"
+    },
+    "latitude": {
+      "type": "number",
+      "minimum": -90,
+      "maximum": 90,
+      "description": "Degrees; wire value is int32 scaled by 1e7. The firmware computes the scaled value in float32, so expect roughly 0.2-1 m of quantisation error"
+    },
+    "longitude": {
+      "type": "number",
+      "minimum": -180,
+      "maximum": 180,
+      "description": "Degrees; wire value is int32 scaled by 1e7. Same float32 quantisation as latitude"
+    },
+    "has_cell": {
+      "type": "boolean",
+      "description": "True when the payload carried a cell block (flags bit 6)"
+    },
+    "mobile_country_code": { "type": "integer", "minimum": 0, "maximum": 65535 },
+    "mobile_network_code": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 65535
-    },
-    "mobile_network_code": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      "maximum": 65535,
+      "description": "MNC 0 is a valid network code and is published as 0, not omitted"
+    }
   },
   "allOf": [
     {
@@ -142,14 +116,179 @@ Example:
         "properties": { "has_gps": { "const": true } },
         "required": ["has_gps"]
       },
-      "then": { "required": ["latitude", "longitude"] }
+      "then": { "required": ["latitude", "longitude"] },
+      "else": {
+        "not": { "anyOf": [{ "required": ["latitude"] }, { "required": ["longitude"] }] }
+      }
     },
     {
       "if": {
         "properties": { "has_cell": { "const": true } },
         "required": ["has_cell"]
       },
-      "then": { "required": ["mobile_country_code", "mobile_network_code"] }
+      "then": { "required": ["mobile_country_code", "mobile_network_code"] },
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["mobile_country_code"] },
+            { "required": ["mobile_network_code"] }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "reading": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timestamp",
+        "timedif",
+        "temperature",
+        "humidity",
+        "pressure",
+        "carbon_dioxide",
+        "methane_raw",
+        "methane",
+        "offset",
+        "depth",
+        "moisture_raw",
+        "moisture",
+        "battery_voltage",
+        "battery_percentage",
+        "status",
+        "status_flags",
+        "error_code"
+      ],
+      "properties": {
+        "timestamp": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix seconds. The newest reading carries an absolute timestamp on the wire; older readings are reconstructed by walking timedif backwards from it"
+        },
+        "timedif": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Raw wire value, passed through unchanged. For every reading except the newest it is the gap in seconds to the NEXT NEWER reading. On the newest reading the firmware instead writes the gap to the PREVIOUS OLDER reading (duplicating that reading's timedif), and 0 when the batch holds a single reading. A value of 65535 may be a saturated clamp rather than a true gap, in which case reconstructed timestamps for older readings are too recent"
+        },
+        "temperature": {
+          "type": "number",
+          "description": "Celsius. Widened from float32, so expect representation artifacts such as 23.100000381469727"
+        },
+        "humidity": { "type": "number", "description": "Percent (from float32)" },
+        "pressure": { "type": "number", "description": "hPa (from float32)" },
+        "carbon_dioxide": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "ppm" },
+        "methane": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "ppm" },
+        "methane_raw": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Uncalibrated sensor count" },
+        "offset": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Millimetres" },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Millimetres. This is the field the firmware calls `distance`; the two names refer to the same wire slot"
+        },
+        "moisture": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 655.35,
+          "description": "Percent; wire value is uint16 centi-percent divided by 100"
+        },
+        "moisture_raw": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Uncalibrated sensor count" },
+        "battery_voltage": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Millivolts" },
+        "battery_percentage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 655.35,
+          "description": "Percent; wire value is uint16 centi-percent divided by 100"
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Raw sensor-health bitfield from the firmware's TelemetryStatus namespace. 0 means every sensor read succeeded"
+        },
+        "status_flags": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "`status` decoded into names. Empty when status is 0. A set flag means that sensor's read failed and the corresponding value in this reading is a stale carry-over of the previous sample, not a fresh measurement",
+          "items": {
+            "type": "string",
+            "anyOf": [
+              {
+                "enum": [
+                  "battery_read_failed",
+                  "ultrasonic_read_failed",
+                  "temperature_read_failed",
+                  "methane_read_failed",
+                  "co2_read_failed"
+                ]
+              },
+              {
+                "pattern": "^unknown_bit_[0-7]$",
+                "description": "A status bit the firmware has defined but this service does not name yet"
+              }
+            ]
+          }
+        },
+        "error_code": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Opaque device error code; the firmware assigns no defined values at protocol v0"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "ABC-DEF-1234",
+      "version": "0",
+      "flags": 128,
+      "readings": [
+        {
+          "timestamp": 1756512000,
+          "timedif": 300,
+          "temperature": 23.100000381469727,
+          "humidity": 61.5,
+          "pressure": 1008.25,
+          "carbon_dioxide": 412,
+          "methane_raw": 1350,
+          "methane": 8,
+          "offset": 120,
+          "depth": 940,
+          "moisture_raw": 2100,
+          "moisture": 34.5,
+          "battery_voltage": 3980,
+          "battery_percentage": 87.25,
+          "status": 0,
+          "status_flags": [],
+          "error_code": 0
+        },
+        {
+          "timestamp": 1756512300,
+          "timedif": 300,
+          "temperature": 23.5,
+          "humidity": 60.75,
+          "pressure": 1008.1,
+          "carbon_dioxide": 418,
+          "methane_raw": 1361,
+          "methane": 9,
+          "offset": 120,
+          "depth": 938,
+          "moisture_raw": 2094,
+          "moisture": 34.2,
+          "battery_voltage": 3975,
+          "battery_percentage": 87.1,
+          "status": 2,
+          "status_flags": ["ultrasonic_read_failed"],
+          "error_code": 0
+        }
+      ],
+      "has_gps": true,
+      "latitude": 13.7563,
+      "longitude": 100.5018,
+      "has_cell": false
     }
   ]
 }
@@ -208,27 +347,53 @@ The service builds the JSON body using string formatting:
 
 ### Error JSON Schema (Draft 2020-12)
 
+This is a copy of [`schemas/error-message.schema.json`](schemas/error-message.schema.json), which is the canonical definition.
+
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pact.local/schemas/error-message.json",
   "title": "IngestErrorMessage",
+  "description": "Failure record published to the default exchange with routing key error_handler_queue.",
   "type": "object",
   "additionalProperties": false,
   "required": ["source", "error", "payload"],
   "properties": {
-    "source": { "type": "string", "minLength": 1 },
-    "error": { "type": "string", "minLength": 1 },
+    "source": {
+      "type": "string",
+      "enum": ["tcp_ingest", "json_publish", "rabbitmq_consumer", "rabbitmq_ack"],
+      "description": "Logical stage that failed"
+    },
+    "error": {
+      "type": "string",
+      "description": "Go error text"
+    },
     "payload": {
       "type": "string",
-      "description": "Original binary payload coerced to string and JSON-escaped"
+      "description": "Original binary payload coerced to a Go string; lossy for non-UTF8 bytes. Empty when no payload was read"
     }
-  }
+  },
+  "examples": [
+    {
+      "source": "tcp_ingest",
+      "error": "payload size mismatch: received 60 bytes, need 90 for count=2 flags=0x80",
+      "payload": "\u0000\u0001..."
+    }
+  ]
 }
 ```
 
 ## Consumer Notes
 
+- `status_flags` decodes the firmware's `status` bitfield. When a flag is set, the
+  matching value in that reading is a stale carry-over of the previous sample,
+  not a fresh measurement - alerting on the value alone will treat a dead sensor
+  as a steady one.
+- `latitude`/`longitude` are present exactly when `has_gps` is true, and
+  `mobile_country_code`/`mobile_network_code` exactly when `has_cell` is true.
+  Zero is a legitimate value for all four and is published rather than omitted.
+- The newest reading's `timedif` is the gap to the *previous* reading, unlike
+  every other reading's. See `telemetry.md`.
 - Telemetry consumers should bind queues to exchange `pact.telemetry` using topic binding keys (for example `pact.telemetry.*.*` or `pact.telemetry.2.*`).
 - Error consumer should consume from `error_handler_queue`.
 - Failed-message consumer/alerts should monitor `failed_messages_queue`.

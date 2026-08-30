@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pact.local/schemas/error-message.json",
+  "title": "IngestErrorMessage",
+  "description": "Failure record published to the default exchange with routing key error_handler_queue.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "error", "payload"],
+  "properties": {
+    "source": {
+      "type": "string",
+      "enum": ["tcp_ingest", "json_publish", "rabbitmq_consumer", "rabbitmq_ack"],
+      "description": "Logical stage that failed"
+    },
+    "error": {
+      "type": "string",
+      "description": "Go error text"
+    },
+    "payload": {
+      "type": "string",
+      "description": "Original binary payload coerced to a Go string; lossy for non-UTF8 bytes. Empty when no payload was read"
+    }
+  },
+  "examples": [
+    {
+      "source": "tcp_ingest",
+      "error": "payload size mismatch: received 60 bytes, need 90 for count=2 flags=0x80",
+      "payload": "\u0000\u0001..."
+    }
+  ]
+}

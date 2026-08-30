@@ -77,7 +77,8 @@ Why sizes differ:
 
 ### Newest record (42 bytes before optional blocks)
 
-1. `timedif` (uint16)
+1. `timedif` (uint16): see the note below - the firmware writes the gap to the
+   *previous* (older) reading here, not to a newer one
 2. `timestamp` (uint64): absolute Unix timestamp
 3. `temperature` (float32, Celsius)
 4. `humidity` (float32, percent)
@@ -93,6 +94,39 @@ Why sizes differ:
 14. `moisture_raw` (uint16)
 15. `status` (uint8)
 16. `error_code` (uint8)
+
+## `timedif` semantics
+
+The server reconstructs older timestamps by walking `timedif` backwards from
+the newest record's absolute `timestamp`, so only the historical records'
+`timedif` values affect reconstruction:
+
+1. On a historical record, `timedif` is the gap in seconds to the **next newer**
+   reading.
+2. On the newest record, the firmware writes the gap to the **previous older**
+   reading instead. That duplicates the last historical record's `timedif`, and
+   is `0` when the payload carries a single reading. The server publishes the
+   value unchanged but does not use it.
+3. The firmware clamps `timedif` at `0xFFFF` (65535 s, about 18.2 h). A gap
+   longer than that saturates, and every older reading in the batch then
+   reconstructs to a timestamp that is too recent.
+
+## `status` bitfield
+
+`status` mirrors the `TelemetryStatus` namespace in the device firmware. A set
+bit means that sensor's read failed, so the value carried in the record is the
+previous sample rather than a fresh measurement:
+
+1. Bit 0 (`0x01`): `battery_read_failed`
+2. Bit 1 (`0x02`): `ultrasonic_read_failed`
+3. Bit 2 (`0x04`): `temperature_read_failed`
+4. Bit 3 (`0x08`): `methane_read_failed`
+5. Bit 4 (`0x10`): `co2_read_failed`
+6. Bits 5-7: unassigned
+
+`status` of `0` means every sensor read succeeded. The ingest service publishes
+both the raw byte and a decoded `status_flags` array; bits with no name here are
+published as `unknown_bit_<n>` rather than dropped.
 
 ## Optional trailing blocks
 

@@ -53,13 +53,13 @@ RABBITMQ_TELEMETRY_EXCHANGE=pact.telemetry
 Start the service locally:
 
 ```bash
-go run main.go
+go run ./cmd/ingest
 ```
 
 Build the binary:
 
 ```bash
-go build -o ingest .
+go build -o ingest ./cmd/ingest
 ```
 
 Run with Docker:
@@ -143,7 +143,15 @@ See `rabbitmq.md` for full queue topology, dead-letter behavior, and message sch
 
 ## Repository Files
 
-- `main.go` - TCP server and RabbitMQ integration
+- `cmd/ingest/` - entry point: configuration, startup, shutdown
+- `internal/config/` - `.env` loading and environment value parsing
+- `internal/telemetry/` - wire format, framing, parsing, and the published
+  message types, plus `firmware_parity_test.go`, a transcription of the device
+  firmware's payload builder so wire-format drift fails a test
+- `internal/server/` - TCP listener, accept loop, and connection handling
+- `internal/rabbit/` - broker connection, topology, consumer, and publishing
+- `schemas/` - canonical JSON Schemas for the published messages
+- `tools/` - the Docker image build helper (`go run -tags tools ./tools`)
 - `test.py` - sample TCP payload sender
 - `telemetry.md` - byte-level payload construction guide
 - `rabbitmq.md` - RabbitMQ topology, routing, and error/dead-letter details
