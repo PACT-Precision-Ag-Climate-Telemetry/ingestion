@@ -18,16 +18,18 @@ import (
 //	13    record count
 const headerSize = 14
 
-// Shared per-record sensor payload:
-// temp, humid, pressure (float32 each = 12 bytes), ch4_ppm, co2, offset,
-// depth, moisture_pct, batt_p, batt_v, ch4_raw, moisture_raw (uint16
-// each = 18 bytes), status + error (1 byte each = 2 bytes) => 32 bytes.
-const recordSensorSize = 32
+// Shared per-record sensor payload (always present):
+// temp (int16, degC x100), humid, ch4_ppm, co2, offset, depth, moisture_pct,
+// batt_p, batt_v (uint16 each) = 18 bytes, then status (1 byte) => 19 bytes.
+// When FlagRawPresent is set, ch4_raw + moisture_raw (uint16 each = 4 bytes)
+// sit between batt_v and status.
+const recordSensorBaseSize = 19
+const recordRawSize = 4
 
 // Historical records carry timedif + sensor payload; the newest record adds
 // an absolute timestamp while still carrying the timedif field.
-const historicalRecordSize = 2 + recordSensorSize     // 34 bytes
-const newestRecordBaseSize = 2 + 8 + recordSensorSize // 42 bytes
+const timedifSize = 2
+const timestampSize = 8
 
 // Optional trailing blocks, gated by bits in the header flags byte.
 const gpsBlockSize = 8  // 4-byte latitude + 4-byte longitude
@@ -35,9 +37,29 @@ const cellBlockSize = 4 // 2-byte MCC + 2-byte MNC
 
 const (
 	flagVersionMask byte = 0x0F
+	FlagRawPresent  byte = 1 << 5
 	FlagCellPresent byte = 1 << 6
 	FlagGPSPresent  byte = 1 << 7
 )
+
+// recordSensorSize is the per-record sensor payload size for the given flags:
+// 19 bytes, or 23 when the raw ADC fields are present.
+func recordSensorSize(flags byte) int {
+	if flags&FlagRawPresent != 0 {
+		return recordSensorBaseSize + recordRawSize
+	}
+	return recordSensorBaseSize
+}
+
+// historicalRecordSize is 21 bytes (25 with raw fields).
+func historicalRecordSize(flags byte) int {
+	return timedifSize + recordSensorSize(flags)
+}
+
+// newestRecordSize is 29 bytes (33 with raw fields).
+func newestRecordSize(flags byte) int {
+	return timedifSize + timestampSize + recordSensorSize(flags)
+}
 
 // ReadMessage reads one full variable-length telemetry payload off
 // the connection: it reads the fixed header first, uses the count/flags in
@@ -67,9 +89,9 @@ func ReadMessage(reader io.Reader) ([]byte, error) {
 // expectedRemainingSize returns the number of bytes that follow the header
 // for a payload with the given record count and flags.
 func expectedRemainingSize(count int, flags byte) int {
-	size := newestRecordBaseSize
+	size := newestRecordSize(flags)
 	if count > 1 {
-		size += (count - 1) * historicalRecordSize
+		size += (count - 1) * historicalRecordSize(flags)
 	}
 	if flags&FlagGPSPresent != 0 {
 		size += gpsBlockSize

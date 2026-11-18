@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telemetry Packet Builder</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --ink:#1b1f24; --muted:#5d6675; --line:#e1e4ea; --soft:#f0f2f5;
+  --accent:#2f6fed; --warn:#a85208; --err:#c0392b; --ok:#1f7a45;
+  --seg-s:72%; --seg-l:87%; --seg-ink:#1b1f24; --hl:#111;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1115; --panel:#161a20; --ink:#e6e9ee; --muted:#9aa3b1; --line:#2a3039; --soft:#1d222a;
+    --accent:#6f9cff; --warn:#f2a660; --err:#ff7d6e; --ok:#62d394;
+    --seg-s:42%; --seg-l:27%; --seg-ink:#eef1f5; --hl:#fff; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1115; --panel:#161a20; --ink:#e6e9ee; --muted:#9aa3b1; --line:#2a3039; --soft:#1d222a;
+  --accent:#6f9cff; --warn:#f2a660; --err:#ff7d6e; --ok:#62d394;
+  --seg-s:42%; --seg-l:27%; --seg-ink:#eef1f5; --hl:#fff; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1400px;margin:0 auto;padding:20px 16px 48px}
+header.top{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:14px}
+h1{font-size:20px;margin:0 0 2px}
+.sub{color:var(--muted);margin:0}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+button,.btn{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:7px;padding:6px 11px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;min-width:0}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.mono{font-family:var(--mono)}
+.main{display:grid;grid-template-columns:minmax(300px,410px) minmax(0,1fr);gap:14px;align-items:start}
+@media (max-width:920px){.main{grid-template-columns:minmax(0,1fr)}}
+
+/* summary */
+.summary{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:baseline}
+.big{font-size:26px;font-weight:650;font-variant-numeric:tabular-nums}
+.formula{font-family:var(--mono);font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.formula b{color:var(--ink);font-weight:600}
+
+/* frame map */
+.map{display:flex;height:44px;border-radius:8px;overflow:hidden;margin-top:12px;border:1px solid var(--line)}
+.map .seg{display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:3px;overflow:hidden;white-space:nowrap;font-size:11px;line-height:1.2;border-right:1px solid var(--panel);cursor:default}
+.map .seg:last-child{border-right:0}
+.map .seg small{opacity:.7;font-family:var(--mono)}
+
+/* categories */
+.seg{background:hsl(var(--h) var(--seg-s) var(--seg-l));color:var(--seg-ink)}
+.c-magic{--h:215}.c-flags{--h:40}.c-id{--h:270}.c-count{--h:330}
+.c-time{--h:205}.c-env{--h:170}.c-gas{--h:22}.c-level{--h:128}
+.c-batt{--h:75}.c-status{--h:0}.c-gps{--h:190}.c-cell{--h:245}
+.c-rec{--h:205}
+.legend{display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:10px;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+
+/* editor */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px}
+.row{display:flex;flex-direction:column;gap:3px;padding:4px 6px;margin:0 -6px;border-radius:6px}
+.row label{font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:6px}
+.row label em{font-style:normal;font-family:var(--mono);font-size:11px;opacity:.85}
+.row.hl{background:var(--soft);box-shadow:inset 3px 0 0 hsl(var(--h,215) 70% 50%)}
+input[type=text],input[type=number]{font:13px var(--mono);width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);min-width:0}
+input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+input.bad{border-color:var(--err)}
+.hint{font-size:11px;color:var(--muted);font-family:var(--mono)}
+.toggles{display:flex;gap:14px;flex-wrap:wrap;margin:8px 0}
+.toggles label{display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+.bits{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;margin-top:6px}
+.bit{display:flex;flex-direction:column;align-items:center;padding:5px 0 4px;border-radius:6px;border:1px solid var(--line);cursor:pointer;user-select:none;background:var(--bg)}
+.bit b{font:600 15px var(--mono)}
+.bit span{font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.02em}
+.bit.on{background:hsl(var(--h) var(--seg-s) var(--seg-l));border-color:hsl(var(--h) 60% 50%)}
+.bitidx{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;font:10px var(--mono);color:var(--muted);text-align:center;margin-top:2px}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px}
+.tab{font:12px var(--mono);padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);cursor:pointer;color:var(--ink)}
+.tab.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.statusbits{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px;margin-top:4px}
+.statusbits label{display:inline-flex;gap:4px;align-items:center;color:var(--ink)}
+.sep{border:0;border-top:1px dashed var(--line);margin:10px 0}
+
+/* hex */
+.hex{font:12.5px var(--mono);overflow-x:auto}
+.hrow{display:flex;gap:14px;align-items:center;padding:1px 0}
+.hoff{color:var(--muted);width:44px;flex:none;user-select:none}
+.hbytes{display:flex;flex:none}
+.b{display:inline-block;width:2.6ch;text-align:center;padding:3px 0;cursor:pointer}
+.b.fs{border-top-left-radius:5px;border-bottom-left-radius:5px;margin-left:2px}
+.b.fe{border-top-right-radius:5px;border-bottom-right-radius:5px}
+.hbytes .b:first-child{margin-left:0}
+.hasc{display:flex;color:var(--muted)}
+.hasc span{width:1.05ch;text-align:center}
+.on-hl{box-shadow:inset 0 0 0 2px var(--hl);position:relative;z-index:1;color:var(--ink)}
+@media (max-width:560px){.hasc{display:none}}
+
+/* inspector */
+.insp{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px;min-height:128px}
+.insp dt{color:var(--muted)}
+.insp dd{margin:0;font-family:var(--mono);overflow-wrap:anywhere}
+.insp .empty{grid-column:1/-1;color:var(--muted)}
+.pin{font-size:11px;color:var(--accent)}
+
+/* table */
+details{border-top:1px solid var(--line)}
+details:first-of-type{border-top:0}
+summary{cursor:pointer;padding:8px 2px;font-weight:600;display:flex;gap:8px;align-items:center}
+summary .chip{width:10px;height:10px;border-radius:3px}
+summary small{font-weight:400;color:var(--muted);font-family:var(--mono)}
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:8px}
+.tbl th{text-align:left;color:var(--muted);font-weight:500;font-size:11px;padding:4px 6px;border-bottom:1px solid var(--line)}
+.tbl td{padding:4px 6px;border-bottom:1px solid var(--line);font-family:var(--mono);white-space:nowrap}
+.tbl td.n{font-family:inherit}
+.tbl tr{cursor:pointer}
+.tbl tr.on-hl{box-shadow:none;background:var(--soft)}
+.tblwrap{overflow-x:auto}
+.dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:middle}
+
+/* json + warnings */
+pre{margin:0;font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:460px;overflow:auto;white-space:pre}
+.warns{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.warns li{padding:6px 10px;border-radius:6px;background:var(--soft);border-left:3px solid var(--warn)}
+.warns li.err{border-left-color:var(--err)}
+.warns li.ok{border-left-color:var(--ok)}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:7px 14px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Telemetry TCP packet builder</h1>
+      <p class="sub">Edit fields on the left. Hover any byte, row or input to see where it lives in the frame. All numbers are little-endian.</p>
+    </div>
+    <div class="btns">
+      <button id="copyHex">Copy hex</button>
+      <button id="copyPy">Copy as Python bytes</button>
+      <button id="theme" title="Theme">Theme: auto</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="summary">
+      <div><div class="big" id="total">0 B</div><div class="hint">total frame size</div></div>
+      <div class="formula" id="formula"></div>
+    </div>
+    <div class="map" id="map"></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <div class="main">
+    <div id="editor"></div>
+
+    <div>
+      <section class="card">
+        <h2>Hex dump <span class="hint" id="hexHint"></span></h2>
+        <div class="hex" id="hex"></div>
+      </section>
+      <section class="card">
+        <h2>Field inspector <span class="pin" id="pinNote"></span></h2>
+        <dl class="insp" id="insp"><div class="empty">Hover a byte, table row or input. Click to pin.</div></dl>
+      </section>
+      <section class="card">
+        <h2>Field table</h2>
+        <div id="table"></div>
+      </section>
+      <section class="card">
+        <h2>Server checks</h2>
+        <ul class="warns" id="warns"></ul>
+      </section>
+      <section class="card">
+        <h2>Parsed JSON preview <span class="hint">what telemetry.Parse would publish</span></h2>
+        <pre id="json"></pre>
+      </section>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* =====================================================================
+   PROTOCOL SPEC — edit here to change the wire format.
+   Mirrors internal/telemetry/protocol.go + parse.go
+   ===================================================================== */
+const SIZE = {u8:1, u16:2, i16:2, i32:4, u64:8, f32:4, ascii10:10};
+const TYPE_LABEL = {u8:'uint8', u16:'uint16 LE', i16:'int16 LE', i32:'int32 LE', u64:'uint64 LE', f32:'float32 LE', ascii10:'10 × ASCII'};
+const RANGE = {u8:[0,255], u16:[0,65535], i16:[-32768,32767], i32:[-2147483648,2147483647]};
+
+const CATS = {
+  magic:{label:'Magic'}, flags:{label:'Flags/version'}, id:{label:'Device ID'}, count:{label:'Count'},
+  time:{label:'Time'}, env:{label:'Environment'}, gas:{label:'Gas'}, level:{label:'Level / moisture'},
+  batt:{label:'Battery'}, status:{label:'Status'}, gps:{label:'GPS'}, cell:{label:'Cell'}
+};
+
+const STATUS_BITS = ['battery_read_failed','ultrasonic_read_failed','temperature_read_failed','methane_read_failed','co2_read_failed','moisture_read_failed'];
+
+// Shared 32-byte sensor body (same order in historical and newest records)
+const SENSOR = [
+  {k:'temp',     name:'temperature',        t:'i16', cat:'env',   scale:100, unit:'°C', desc:'Air temperature °C × 100, signed (−327.68 … 327.67). Server divides by 100.'},
+  {k:'humid',    name:'humidity',           t:'u16', cat:'env',   scale:100, unit:'%',  desc:'Relative humidity % × 100. Server divides by 100.'},
+  {k:'ch4',      name:'methane',            t:'u16', cat:'gas',   unit:'ppm', desc:'Methane concentration (ppm). Field ch4_ppm.'},
+  {k:'co2',      name:'carbon_dioxide',     t:'u16', cat:'gas',   unit:'ppm', desc:'CO₂ concentration (ppm).'},
+  {k:'offset',   name:'offset',             t:'u16', cat:'level', unit:'mm',  desc:'Sensor offset in mm.'},
+  {k:'depth',    name:'depth',              t:'u16', cat:'level', unit:'mm',  desc:'Ultrasonic depth in mm.'},
+  {k:'moist',    name:'moisture',           t:'u16', cat:'level', scale:100, unit:'%', desc:'Soil moisture × 100. Server divides by 100.'},
+  {k:'battP',    name:'battery_percentage', t:'u16', cat:'batt',  scale:100, unit:'%', desc:'Battery percent × 100. Server divides by 100.'},
+  {k:'battV',    name:'battery_voltage',    t:'u16', cat:'batt',  unit:'mV',  desc:'Battery voltage in millivolts.'},
+  {k:'ch4Raw',   name:'methane_raw',        t:'u16', cat:'gas',   raw:true, desc:'Raw methane ADC value. Only sent when flags bit 5 (RAW) = 1.'},
+  {k:'moistRaw', name:'moisture_raw',       t:'u16', cat:'level', raw:true, desc:'Raw moisture ADC value. Only sent when flags bit 5 (RAW) = 1.'},
+  {k:'status',   name:'status',             t:'u8',  cat:'status', bits:true, desc:'Sensor-health bitfield. Set bit = that read failed (value is the previous sample).'},];
+
+const FLAG_VERSION_MASK = 0x0F, FLAG_RAW = 1<<5, FLAG_CELL = 1<<6, FLAG_GPS = 1<<7;
+
+/* =====================================================================
+   STATE
+   ===================================================================== */
+function defaultRecord(i){
+  return {timedif:60, temp:2850+i*10, humid:7230-i*20, ch4:1890+i*3, co2:415+i,
+    offset:120, depth:450-i, moist:3650, battP:8700-i*5, battV:3950-i, ch4Raw:2048+i, moistRaw:1820, status:0};
+}
+const S = {
+  magic1:0x1A, magic2:0x2B, version:0, reserved:0, raw:true, gps:true, cell:true,
+  id:'ABCDEF1234', timestamp:Math.floor(Date.now()/1000),
+  records:[defaultRecord(0), defaultRecord(1), defaultRecord(2)],
+  lat:13.7563, lon:100.5018, mcc:520, mnc:3, sel:2
+};
+const openBlocks = new Set(['hdr','r2']);
+let pinned = null; // field path
+let hover = null;  // {f:path} or {b:block}
+
+/* =====================================================================
+   ENCODING
+   ===================================================================== */
+function clampInt(v, lo, hi){ v = Math.round(Number(v)); if(!isFinite(v)) v = 0; return Math.min(hi, Math.max(lo, v)); }
+function enc(t, v){
+  const dv = new DataView(new ArrayBuffer(SIZE[t]));
+  switch(t){
+    case 'u8':  dv.setUint8(0, clampInt(v,0,255)); break;
+    case 'u16': dv.setUint16(0, clampInt(v,0,65535), true); break;
+    case 'i16': dv.setInt16(0, clampInt(v,-32768,32767), true); break;
+    case 'i32': dv.setInt32(0, clampInt(v,-2147483648,2147483647), true); break;
+    case 'u64': dv.setBigUint64(0, BigInt(clampInt(v,0,Number.MAX_SAFE_INTEGER)), true); break;
+    case 'f32': dv.setFloat32(0, Number(v)||0, true); break;
+  }
+  return [...new Uint8Array(dv.buffer)];
+}
+const hx = b => b.toString(16).toUpperCase().padStart(2,'0');
+const hexN = (n,w=4) => '0x'+n.toString(16).toUpperCase().padStart(w,'0');
+// Sensor body: 19 bytes always + 4 bytes (methane_raw, moisture_raw) when RAW is set
+function bodySize(raw = S.raw){ return SENSOR.reduce((n,s) => n + (s.raw && !raw ? 0 : SIZE[s.t]), 0); }
+function flagsByte(){ return (S.version & 0x0F) | ((S.reserved & 1)<<4) | (S.raw?FLAG_RAW:0) | (S.cell?FLAG_CELL:0) | (S.gps?FLAG_GPS:0); }
+function idBytes(){
+  const out = [];
+  for(let i=0;i<10;i++){ const c = S.id.charCodeAt(i); out.push(i < S.id.length ? (c < 128 ? c : 0x3F) : 0x30); }
+  return out;
+}
+function statusText(v){
+  const n=[]; for(let b=0;b<8;b++) if(v&(1<<b)) n.push(STATUS_BITS[b]||('unknown_bit_'+b));
+  return n.length ? n.join(', ') : 'all reads OK';
+}
+
+/* Build the full frame as an ordered field list. */
+function build(){
+  const F = []; let off = 0;
+  const add = (block, blockLabel, blockCat, f) => {
+    f.block = block; f.blockLabel = blockLabel; f.blockCat = blockCat; f.offset = off; f.size = f.bytes.length; f.id = F.length;
+    off += f.size; F.push(f);
+  };
+  const H = ['hdr','Header','magic'];
+  add(...H, {path:'magic1', name:'magic_byte_1', t:'u8', cat:'magic', value:S.magic1, bytes:enc('u8',S.magic1), shown:hexN(S.magic1,2), desc:'Must equal env magic_byte_1, otherwise "invalid magic bytes".'});
+  add(...H, {path:'magic2', name:'magic_byte_2', t:'u8', cat:'magic', value:S.magic2, bytes:enc('u8',S.magic2), shown:hexN(S.magic2,2), desc:'Must equal env magic_byte_2.'});
+  const fl = flagsByte();
+  add(...H, {path:'flags', name:'flags / version', t:'u8', cat:'flags', value:fl, bytes:[fl], shown:hexN(fl,2)+' = 0b'+fl.toString(2).padStart(8,'0'),
+    decoded:`version=${S.version}, raw=${S.raw}, gps=${S.gps}, cell=${S.cell}${S.reserved?`, reserved_bit4=1`:''}`,
+    desc:'Bits 0–3 version (must be 0), bit 4 reserved, bit 5 RAW (methane_raw + moisture_raw present in every record), bit 6 Cell block present, bit 7 GPS block present.'});
+  const idb = idBytes();
+  const idStr = String.fromCharCode(...idb);
+  add(...H, {path:'id', name:'device_id', t:'ascii10', cat:'id', value:idStr, bytes:idb, shown:`"${idStr}"`,
+    decoded:`${idStr.slice(0,3)}-${idStr.slice(3,6)}-${idStr.slice(6)}`, desc:'10 ASCII bytes. Server formats it as XXX-XXX-XXXX. Short IDs are padded with "0".'});
+  const n = S.records.length;
+  add(...H, {path:'count', name:'record_count', t:'u8', cat:'count', value:n, bytes:[n], shown:String(n), desc:'Number of records that follow (1–255). Drives the body length the server reads.'});
+
+  S.records.forEach((r, i) => {
+    const newest = i === n-1;
+    const B = ['r'+i, `Record ${i} · ${newest?'newest':'historical'}`, 'time'];
+    add(...B, {path:`rec.${i}.timedif`, name:'timedif', t:'u16', cat:'time', value:r.timedif, bytes:enc('u16',r.timedif), shown:r.timedif+' s',
+      desc: newest ? 'Firmware writes the gap to the previous (older) reading here. Published but not used for reconstruction.'
+                   : 'Seconds until the next newer reading. Used to rebuild this record\'s timestamp.'});
+    if(newest) add(...B, {path:'timestamp', name:'timestamp', t:'u64', cat:'time', value:S.timestamp, bytes:enc('u64',S.timestamp), shown:String(S.timestamp),
+      decoded:new Date(S.timestamp*1000).toISOString().replace('.000',''), desc:'Absolute Unix time (s) of the newest reading. Only present in the last record.'});
+    SENSOR.forEach(s => {
+      if(s.raw && !S.raw) return; // *_raw fields only on the wire when RAW flag is set
+      const v = r[s.k];
+      const iv = s.t==='f32' ? 0 : clampInt(v, ...RANGE[s.t]);
+      let shown = s.t==='f32' ? String(Math.fround(Number(v)||0)) : String(iv);
+      let decoded;
+      if(s.scale) decoded = (iv/s.scale) + ' ' + s.unit;
+      else if(s.unit) decoded = shown + ' ' + s.unit;
+      if(s.bits) { shown = hexN(clampInt(v,0,255),2); decoded = statusText(clampInt(v,0,255)); }
+      add(...B, {path:`rec.${i}.${s.k}`, name:s.name, t:s.t, cat:s.cat, value:v, bytes:enc(s.t,v), shown, decoded, desc:s.desc});
+    });
+  });
+
+  if(S.gps){
+    const G = ['gps','GPS block','gps'];
+    const la = Math.round(S.lat*1e7), lo = Math.round(S.lon*1e7);
+    add(...G, {path:'lat', name:'latitude', t:'i32', cat:'gps', value:la, bytes:enc('i32',la), shown:String(la), decoded:(la/1e7)+'°', desc:'Degrees × 10,000,000 as signed int32.'});
+    add(...G, {path:'lon', name:'longitude', t:'i32', cat:'gps', value:lo, bytes:enc('i32',lo), shown:String(lo), decoded:(lo/1e7)+'°', desc:'Degrees × 10,000,000 as signed int32.'});
+  }
+  if(S.cell){
+    const C = ['cell','Cell block','cell'];
+    add(...C, {path:'mcc', name:'mobile_country_code', t:'u16', cat:'cell', value:S.mcc, bytes:enc('u16',S.mcc), shown:String(clampInt(S.mcc,0,65535)), desc:'MCC, e.g. 520 = Thailand.'});
+    add(...C, {path:'mnc', name:'mobile_network_code', t:'u16', cat:'cell', value:S.mnc, bytes:enc('u16',S.mnc), shown:String(clampInt(S.mnc,0,65535)), desc:'MNC. 0 is a valid code.'});
+  }
+  const bytes = F.flatMap(f => f.bytes);
+  const byteField = []; F.forEach(f => { for(let k=0;k<f.size;k++) byteField.push(f); });
+  return {F, bytes, byteField};
+}
+
+/* =====================================================================
+   RENDER — editor
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function inp(path, label, value, opts={}){
+  const type = opts.text ? 'text' : 'number';
+  const extra = opts.text ? `maxlength="${opts.max||64}" spellcheck="false"` : `step="${opts.step||1}"`;
+  return `<div class="row c-${opts.cat||'magic'}" data-path="${path}"><label>${esc(label)}<em>${esc(opts.meta||'')}</em></label>
+    <input type="${type}" data-path="${path}" value="${esc(value)}" ${extra}>${opts.hint?`<div class="hint" data-hint="${path}">${opts.hint}</div>`:''}</div>`;
+}
+
+function renderEditor(){
+  const n = S.records.length, i = S.sel, r = S.records[i], newest = i === n-1;
+  let h = `<section class="card"><h2>Header <span class="hint">14 bytes</span></h2>
+    <div class="grid2">
+      ${inp('magic1','magic_byte_1',hexN(S.magic1,2),{text:true,max:4,cat:'magic',meta:'u8'})}
+      ${inp('magic2','magic_byte_2',hexN(S.magic2,2),{text:true,max:4,cat:'magic',meta:'u8'})}
+    </div>
+    ${inp('id','device_id',S.id,{text:true,max:10,cat:'id',meta:'10 B ASCII',hint:''})}
+    <div class="row c-flags" data-path="flags"><label>flags / version byte<em id="flagHex"></em></label>
+      <div class="bits" id="bits"></div>
+      <div class="bitidx"><span>7</span><span>6</span><span>5</span><span>4</span><span>3</span><span>2</span><span>1</span><span>0</span></div>
+      <div class="toggles">
+        <label><input type="checkbox" data-struct="gps" ${S.gps?'checked':''}> GPS block (+8 B)</label>
+        <label><input type="checkbox" data-struct="cell" ${S.cell?'checked':''}> Cell block (+4 B)</label>
+        <label><input type="checkbox" data-struct="raw" ${S.raw?'checked':''}> Raw fields (bit 5, +4 B/record)</label>
+      </div>
+    </div>
+    ${inp('version','version (bits 0–3)',S.version,{cat:'flags',meta:'0–15, server needs 0'})}
+  </section>`;
+
+  h += `<section class="card"><h2>Records <span class="hint">${n} × · oldest → newest</span></h2>
+    <div class="btns" style="margin-bottom:10px">
+      <button data-act="add" ${n>=255?'disabled':''}>+ Add record</button>
+      <button data-act="del" ${n<=1?'disabled':''}>− Remove selected</button>
+      <button data-act="copyall" title="Copy this record's sensor values to all records">Apply values to all</button>
+    </div>
+    <div class="tabs">${S.records.map((_,k)=>`<button class="tab ${k===i?'on':''}" data-tab="${k}">R${k}${k===n-1?' ★':''}</button>`).join('')}</div>
+    <div class="hint" style="margin-bottom:8px">R${i} is ${newest?`the newest record: 2 + 8 + ${bodySize()} = ${10+bodySize()} bytes`:`historical: 2 + ${bodySize()} = ${2+bodySize()} bytes`}${S.raw?'':' (RAW off: *_raw skipped)'}</div>
+    <div class="grid2">
+      ${inp(`rec.${i}.timedif`,'timedif',r.timedif,{cat:'time',meta:'u16 s'})}
+      ${newest?inp('timestamp','timestamp',S.timestamp,{cat:'time',meta:'u64 unix'}):''}
+    </div><hr class="sep"><div class="grid2">`;
+  SENSOR.forEach(s => {
+    if(s.bits || (s.raw && !S.raw)) return;
+    h += inp(`rec.${i}.${s.k}`, s.name, r[s.k], {cat:s.cat, step:s.step, meta:(s.t==='f32'?'f32':s.t)+(s.scale?' ×'+s.scale:'')+(s.unit&&!s.scale?' '+s.unit:'')});
+  });
+  h += `</div><div class="row c-status" data-path="rec.${i}.status" style="margin-top:6px"><label>status<em>u8 bitfield</em></label>
+    <div class="statusbits">${[0,1,2,3,4,5,6,7].map(b=>`<label><input type="checkbox" data-path="rec.${i}.status" data-bit="${b}" ${r.status&(1<<b)?'checked':''}>${b}: ${STATUS_BITS[b]||'unassigned'}</label>`).join('')}</div></div>
+  </section>`;
+
+  if(S.gps) h += `<section class="card"><h2>GPS block <span class="hint">8 bytes</span></h2><div class="grid2">
+      ${inp('lat','latitude',S.lat,{cat:'gps',step:0.0000001,meta:'deg → i32×1e7'})}
+      ${inp('lon','longitude',S.lon,{cat:'gps',step:0.0000001,meta:'deg → i32×1e7'})}</div></section>`;
+  if(S.cell) h += `<section class="card"><h2>Cell block <span class="hint">4 bytes</span></h2><div class="grid2">
+      ${inp('mcc','mobile_country_code',S.mcc,{cat:'cell',meta:'u16'})}
+      ${inp('mnc','mobile_network_code',S.mnc,{cat:'cell',meta:'u16'})}</div></section>`;
+  $('editor').innerHTML = h;
+}
+
+function renderBits(){
+  const fl = flagsByte();
+  const names = ['GPS','CELL','RAW','rsv','ver','ver','ver','ver'];
+  $('bits').innerHTML = names.map((nm, k) => {
+    const bit = 7-k, on = (fl>>bit)&1;
+    return `<div class="bit c-flags ${on?'on':''}" data-flagbit="${bit}" title="bit ${bit}"><b>${on}</b><span>${nm}</span></div>`;
+  }).join('');
+  $('flagHex').textContent = hexN(fl,2);
+}
+
+/* =====================================================================
+   RENDER — outputs
+   ===================================================================== */
+let model;
+function update(){
+  model = build();
+  const {F, bytes, byteField} = model;
+  const n = S.records.length, gps = S.gps?8:0, cell = S.cell?4:0;
+
+  // summary
+  $('total').textContent = bytes.length + ' B';
+  const body = bodySize(), hist = 2 + body, newestSz = 10 + body;
+  $('formula').innerHTML = `14 header + ${hist} × (${n} − 1) historical + ${newestSz} newest${S.gps?' + 8 GPS':''}${S.cell?' + 4 cell':''} = <b>${14 + hist*(n-1) + newestSz + gps + cell}</b> bytes<br>simplified: 22 + ${hist} × ${n} + ${gps} + ${cell}<br>sensor body = ${bodySize(false)}${S.raw?' + 4 raw':''} = ${body} B (RAW ${S.raw?'on':'off: *_raw skipped'})`;
+
+  // map
+  const blocks = []; F.forEach(f => { const last = blocks[blocks.length-1]; if(!last || last.block !== f.block) blocks.push({block:f.block, label:f.blockLabel, cat:f.blockCat, offset:f.offset, size:0}); blocks[blocks.length-1].size += f.size; });
+  model.blocks = blocks;
+  $('map').innerHTML = blocks.map(b => {
+    const short = b.block==='hdr'?'Header':b.block==='gps'?'GPS':b.block==='cell'?'Cell':'R'+b.block.slice(1);
+    const cat = b.block==='hdr'?'magic':b.cat;
+    return `<div class="seg c-${cat}" data-b="${b.block}" style="flex:${b.size} 0 0" title="${esc(b.label)} · ${b.size} B @ ${b.offset}">${short}<small>${b.size}B</small></div>`;
+  }).join('');
+
+  // hex
+  const hexEl = $('hex');
+  const bpr = hexEl.clientWidth && hexEl.clientWidth < 520 ? 8 : 16;
+  let hh = '';
+  for(let r=0; r<bytes.length; r+=bpr){
+    let bs = '', as = '';
+    for(let k=r; k<Math.min(r+bpr, bytes.length); k++){
+      const f = byteField[k], first = k===f.offset, last = k===f.offset+f.size-1;
+      bs += `<span class="b seg c-${f.cat}${first?' fs':''}${last?' fe':''}" data-f="${f.path}" data-b="${f.block}">${hx(bytes[k])}</span>`;
+      const c = bytes[k]; as += `<span data-f="${f.path}">${c>=32&&c<127?esc(String.fromCharCode(c)):'·'}</span>`;
+    }
+    hh += `<div class="hrow"><span class="hoff">${r.toString(16).toUpperCase().padStart(4,'0')}</span><span class="hbytes">${bs}</span><span class="hasc">${as}</span></div>`;
+  }
+  hexEl.innerHTML = hh;
+  $('hexHint').textContent = `${bytes.length} bytes · ${bpr}/row`;
+
+  // table
+  let th = '';
+  blocks.forEach(b => {
+    const rows = F.filter(f => f.block === b.block);
+    const cat = b.block==='hdr'?'magic':b.cat;
+    th += `<details data-block="${b.block}" ${openBlocks.has(b.block)?'open':''}><summary><i class="chip seg c-${cat}"></i>${esc(b.label)} <small>@${b.offset} · ${b.size} B</small></summary>
+      <div class="tblwrap"><table class="tbl"><thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Type</th><th>Value</th><th>Bytes on wire</th></tr></thead><tbody>
+      ${rows.map(f => `<tr data-f="${f.path}"><td>${f.offset} <span class="hint">${hexN(f.offset)}</span></td><td>${f.size}</td><td class="n"><i class="dot seg c-${f.cat}"></i>${esc(f.name)}</td><td>${TYPE_LABEL[f.t]}</td><td>${esc(f.shown)}${f.decoded?` <span class="hint">→ ${esc(f.decoded)}</span>`:''}</td><td>${f.bytes.map(hx).join(' ')}</td></tr>`).join('')}
+      </tbody></table></div></details>`;
+  });
+  $('table').innerHTML = th;
+
+  // editor extras
+  renderBits();
+  const idHint = document.querySelector('[data-hint="id"]');
+  if(idHint) idHint.textContent = `on wire: "${String.fromCharCode(...idBytes())}"  → ${model.F[3].decoded}`;
+
+  renderChecks();
+  renderJSON();
+  applyHighlight();
+}
+
+function reconstruct(){
+  const n = S.records.length, ts = new Array(n);
+  ts[n-1] = clampInt(S.timestamp,0,Number.MAX_SAFE_INTEGER);
+  for(let i=n-2; i>=0; i--){
+    const d = clampInt(S.records[i].timedif,0,65535);
+    if(d > ts[i+1]) return {err:`timedif underflows timestamp reconstruction at record ${i}`};
+    ts[i] = ts[i+1] - d;
+  }
+  return {ts};
+}
+
+function renderChecks(){
+  const w = [];
+  if(S.version !== 0) w.push(['err', `Version is ${S.version}. Server rejects with "unsupported version: ${S.version}" (only 0 is accepted).`]);
+  if(S.reserved) w.push(['', 'Reserved bit 4 is set. Server ignores it today.']);
+  if(!S.raw) w.push(['', `RAW is off, so methane_raw and moisture_raw are skipped (records are ${2+bodySize()}/${10+bodySize()} B instead of ${2+bodySize(true)}/${10+bodySize(true)} B).`]);
+  if(S.id.length < 10) w.push(['', `Device ID is ${S.id.length} chars; padded with "0" to 10 bytes (as test.py does).`]);
+  if(/[^\x00-\x7F]/.test(S.id)) w.push(['', 'Device ID has non-ASCII characters; they are sent as "?".']);
+  const rc = reconstruct(); if(rc.err) w.push(['err', rc.err]);
+  const clamped = model.F.filter(f => RANGE[f.t] && typeof f.value === 'number' && (f.value < RANGE[f.t][0] || f.value > RANGE[f.t][1]));
+  clamped.forEach(f => w.push(['', `${f.blockLabel} · ${f.name} = ${f.value} is out of range for ${TYPE_LABEL[f.t]}; clamped.`]));
+  if(S.records.some((r,i)=>i<S.records.length-1 && r.timedif>=65535)) w.push(['', 'A timedif is at 0xFFFF: the firmware saturates here, so older readings reconstruct too recent.']);
+  if(!w.some(x=>x[0]==='err')) w.unshift(['ok', `Frame is consistent with this spec: ${model.bytes.length} bytes, header says ${S.records.length} record(s), body length matches flags.`]);
+  $('warns').innerHTML = w.map(([c,t]) => `<li class="${c}">${esc(t)}</li>`).join('');
+}
+
+function renderJSON(){
+  if(S.version !== 0){ $('json').textContent = JSON.stringify({error:`unsupported version: ${S.version}`}, null, 2); return; }
+  const rc = reconstruct();
+  if(rc.err){ $('json').textContent = JSON.stringify({error:rc.err}, null, 2); return; }
+  const idS = String.fromCharCode(...idBytes());
+  const u16 = v => clampInt(v,0,65535), u8 = v => clampInt(v,0,255), f32 = v => Math.fround(Number(v)||0);
+  const out = {
+    id:`${idS.slice(0,3)}-${idS.slice(3,6)}-${idS.slice(6)}`, version:String(S.version), flags:flagsByte(),
+    readings:S.records.map((r,i) => {
+      const st = u8(r.status), names = [];
+      for(let b=0;b<8;b++) if(st&(1<<b)) names.push(STATUS_BITS[b]||'unknown_bit_'+b);
+      const o = {timestamp:rc.ts[i], timedif:u16(r.timedif), temperature:clampInt(r.temp,-32768,32767)/100, humidity:u16(r.humid)/100,
+        carbon_dioxide:u16(r.co2), methane_raw:u16(r.ch4Raw), methane:u16(r.ch4), offset:u16(r.offset), depth:u16(r.depth),
+        moisture_raw:u16(r.moistRaw), moisture:u16(r.moist)/100, battery_voltage:u16(r.battV), battery_percentage:u16(r.battP)/100,
+        status:st, status_flags:names};
+      if(!S.raw){ delete o.methane_raw; delete o.moisture_raw; }
+      return o;
+    }),
+    has_raw:S.raw,
+    has_gps:S.gps
+  };
+  if(S.gps){ out.latitude = Math.round(S.lat*1e7)/1e7; out.longitude = Math.round(S.lon*1e7)/1e7; }
+  out.has_cell = S.cell;
+  if(S.cell){ out.mobile_country_code = u16(S.mcc); out.mobile_network_code = u16(S.mnc); }
+  $('json').textContent = JSON.stringify(out, null, 2);
+}
+
+function renderLegend(){
+  $('legend').innerHTML = Object.entries(CATS).map(([k,c]) => `<span><i class="seg c-${k}"></i>${c.label}</span>`).join('');
+}
+
+/* =====================================================================
+   HIGHLIGHT + INSPECTOR
+   ===================================================================== */
+function applyHighlight(){
+  document.querySelectorAll('.on-hl').forEach(e => e.classList.remove('on-hl'));
+  document.querySelectorAll('.row.hl').forEach(e => e.classList.remove('hl'));
+  const target = hover || (pinned ? {f:pinned} : null);
+  if(!target){ renderInspector(null); return; }
+  if(target.f){
+    document.querySelectorAll(`.hex [data-f="${CSS.escape(target.f)}"], .tbl [data-f="${CSS.escape(target.f)}"]`).forEach(e => e.classList.add('on-hl'));
+    document.querySelectorAll(`.row[data-path="${CSS.escape(target.f)}"]`).forEach(e => e.classList.add('hl'));
+    renderInspector(model.F.find(f => f.path === target.f) || null);
+  } else if(target.b){
+    document.querySelectorAll(`.hex [data-b="${target.b}"], .map [data-b="${target.b}"]`).forEach(e => e.classList.add('on-hl'));
+    const b = model.blocks.find(x => x.block === target.b);
+    renderInspector(b ? {blockOnly:b} : null);
+  }
+}
+function renderInspector(f){
+  $('pinNote').textContent = pinned ? 'pinned · click again to release' : '';
+  if(!f){ $('insp').innerHTML = '<div class="empty">Hover a byte, table row or input. Click to pin.</div>'; return; }
+  if(f.blockOnly){
+    const b = f.blockOnly;
+    $('insp').innerHTML = `<dt>Block</dt><dd>${esc(b.label)}</dd><dt>Offset</dt><dd>${b.offset} – ${b.offset+b.size-1} (${hexN(b.offset)} – ${hexN(b.offset+b.size-1)})</dd><dt>Size</dt><dd>${b.size} bytes</dd>`;
+    return;
+  }
+  $('insp').innerHTML = `
+    <dt>Field</dt><dd><i class="dot seg c-${f.cat}"></i>${esc(f.name)} <span class="hint">in ${esc(f.blockLabel)}</span></dd>
+    <dt>Offset</dt><dd>${f.offset}${f.size>1?' – '+(f.offset+f.size-1):''} (${hexN(f.offset)}) · ${f.size} B</dd>
+    <dt>Type</dt><dd>${TYPE_LABEL[f.t]}</dd>
+    <dt>Bytes</dt><dd>${f.bytes.map(hx).join(' ')}${f.size>1&&f.t!=='ascii10'?` <span class="hint">(BE read: ${[...f.bytes].reverse().map(hx).join('')})</span>`:''}</dd>
+    <dt>Value</dt><dd>${esc(f.shown)}</dd>
+    ${f.decoded?`<dt>Server sees</dt><dd>${esc(f.decoded)}</dd>`:''}
+    <dt>Meaning</dt><dd style="font-family:inherit">${esc(f.desc||'')}</dd>`;
+}
+
+document.addEventListener('pointerover', e => {
+  const t = e.target.closest('[data-f], .row[data-path], .map [data-b]');
+  let next = null;
+  if(t){
+    if(t.dataset.f) next = {f:t.dataset.f};
+    else if(t.classList.contains('row')) next = {f:t.dataset.path};
+    else next = {b:t.dataset.b};
+  }
+  if(JSON.stringify(next) !== JSON.stringify(hover)){ hover = next; applyHighlight(); }
+});
+document.addEventListener('click', e => {
+  const t = e.target.closest('.hex [data-f], .tbl [data-f]');
+  if(!t) return;
+  pinned = pinned === t.dataset.f ? null : t.dataset.f;
+  // jump the editor to the record that owns the field
+  const m = /^rec\.(\d+)\./.exec(t.dataset.f) || (t.dataset.f==='timestamp' ? [0, S.records.length-1] : null);
+  if(m && +m[1] !== S.sel){ S.sel = +m[1]; openBlocks.add('r'+S.sel); renderEditor(); update(); }
+  applyHighlight();
+});
+document.addEventListener('focusin', e => { const p = e.target.dataset && e.target.dataset.path; if(p){ hover = {f:p}; applyHighlight(); } });
+
+/* =====================================================================
+   EDITING
+   ===================================================================== */
+const editor = $('editor');
+editor.addEventListener('input', e => {
+  const el = e.target, p = el.dataset.path;
+  if(el.dataset.struct){ S[el.dataset.struct] = el.checked; renderEditor(); update(); return; }
+  if(!p) return;
+  let bad = false;
+  if(p === 'magic1' || p === 'magic2'){
+    const v = parseInt(el.value.replace(/^0x/i,''), 16); bad = !(v>=0 && v<=255); if(!bad) S[p] = v;
+  } else if(p === 'id'){ S.id = el.value; }
+  else if(p === 'version'){ const v = clampInt(el.value,0,15); bad = String(v)!==el.value.trim(); S.version = v; }
+  else if(p.startsWith('rec.')){
+    const [, i, k] = p.split('.'); const r = S.records[+i];
+    if(el.dataset.bit !== undefined){ const b = +el.dataset.bit; r.status = el.checked ? (r.status | (1<<b)) : (r.status & ~(1<<b)); }
+    else { const v = parseFloat(el.value); bad = !isFinite(v); r[k] = bad ? 0 : v; }
+  } else { const v = parseFloat(el.value); bad = !isFinite(v); S[p] = bad ? 0 : v; }
+  if(el.type !== 'checkbox') el.classList.toggle('bad', bad);
+  update();
+});
+editor.addEventListener('click', e => {
+  const fb = e.target.closest('[data-flagbit]');
+  if(fb){
+    const fl = flagsByte() ^ (1 << +fb.dataset.flagbit);
+    S.version = fl & 0x0F; S.reserved = (fl>>4)&1; S.raw = !!(fl&FLAG_RAW); S.cell = !!(fl&FLAG_CELL); S.gps = !!(fl&FLAG_GPS);
+    renderEditor(); update(); return;
+  }
+  const tab = e.target.closest('[data-tab]');
+  if(tab){ S.sel = +tab.dataset.tab; openBlocks.add('r'+S.sel); renderEditor(); update(); return; }
+  const act = e.target.closest('[data-act]');
+  if(!act) return;
+  const a = act.dataset.act;
+  if(a === 'add' && S.records.length < 255){
+    const last = S.records[S.records.length-1];
+    S.records.push({...last}); S.sel = S.records.length-1;
+  } else if(a === 'del' && S.records.length > 1){
+    S.records.splice(S.sel, 1); S.sel = Math.min(S.sel, S.records.length-1);
+  } else if(a === 'copyall'){
+    const src = S.records[S.sel];
+    S.records.forEach(r => SENSOR.forEach(s => r[s.k] = src[s.k]));
+    toast('Sensor values copied to all records');
+  }
+  openBlocks.add('r'+S.sel);
+  renderEditor(); update();
+});
+$('table').addEventListener('toggle', e => {
+  const d = e.target; if(!d.dataset || !d.dataset.block) return;
+  d.open ? openBlocks.add(d.dataset.block) : openBlocks.delete(d.dataset.block);
+}, true);
+
+/* =====================================================================
+   COPY / THEME
+   ===================================================================== */
+function toast(msg){ const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 1400); }
+async function copy(text, msg){
+  try { await navigator.clipboard.writeText(text); toast(msg); }
+  catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast(msg); } catch { toast('Copy failed'); } ta.remove(); }
+}
+$('copyHex').onclick = () => copy(model.bytes.map(hx).join(' '), 'Hex copied');
+$('copyPy').onclick = () => copy(`bytes.fromhex("${model.bytes.map(hx).join('')}")`, 'Python bytes copied');
+const themes = ['auto','light','dark'];
+let themeIdx = 0;
+try { const s = localStorage.getItem('pkt-theme'); if(themes.includes(s)) themeIdx = themes.indexOf(s); } catch {}
+function applyTheme(){
+  const t = themes[themeIdx];
+  if(t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = t;
+  $('theme').textContent = 'Theme: ' + t;
+  try { localStorage.setItem('pkt-theme', t); } catch {}
+}
+$('theme').onclick = () => { themeIdx = (themeIdx+1) % 3; applyTheme(); };
+
+let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(update, 120); });
+
+applyTheme();
+renderLegend();
+renderEditor();
+update();
+</script>
+</body>
+</html>

@@ -16,14 +16,16 @@ func TestDecodeStatusFlags(t *testing.T) {
 		{0x00, []string{}},
 		{0x01, []string{"battery_read_failed"}},
 		{0x02, []string{"ultrasonic_read_failed"}},
-		{0x1F, []string{
+		{0x20, []string{"moisture_read_failed"}},
+		{0x3F, []string{
 			"battery_read_failed",
 			"ultrasonic_read_failed",
 			"temperature_read_failed",
 			"methane_read_failed",
 			"co2_read_failed",
+			"moisture_read_failed",
 		}},
-		{0x20, []string{"unknown_bit_5"}},
+		{0x40, []string{"unknown_bit_6"}},
 	}
 
 	for _, tc := range tests {

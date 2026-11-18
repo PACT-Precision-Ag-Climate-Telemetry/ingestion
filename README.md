@@ -93,9 +93,9 @@ python test.py --version 1
 
 ## Payload Layout
 
-The TCP payload is variable length and has this structure:
+The TCP payload is variable length and has this structure (all numbers little-endian):
 
-1. Header (17 bytes)
+1. Header (14 bytes)
 2. `count` records (oldest to newest)
 3. Optional GPS block (8 bytes when flag bit 7 is set)
 4. Optional Cell block (4 bytes when flag bit 6 is set)
@@ -109,27 +109,32 @@ The TCP payload is variable length and has this structure:
 
 Flag/version byte layout:
 
-- Bit 0-3: version
+- Bit 0-3: version (must be 0)
+- Bit 4: reserved
+- Bit 5: RAW - `methane_raw` and `moisture_raw` present in every record
 - Bit 6: cell block present
 - Bit 7: GPS block present
 
 ### Records
 
-- Historical records (`count-1` entries): 34 bytes each
-  - timedif (2 bytes) + environmental/sensor fields (32 bytes)
-- Newest record (last entry): 42 bytes before optional GPS/cell blocks
-  - timedif (2 bytes) + absolute timestamp (8 bytes) + environmental/sensor fields (32 bytes)
+Sensor body (19 bytes, 23 with RAW): temperature (int16, degC x100), humidity
+(uint16, % x100), methane, carbon_dioxide, offset, depth, moisture (x100),
+battery_percentage (x100), battery_voltage, [methane_raw, moisture_raw], status (uint8).
+
+- Historical records (`count-1` entries): timedif (2 bytes) + sensor body = 21 bytes (25 with RAW)
+- Newest record (last entry): timedif (2) + absolute timestamp (8) + sensor body = 29 bytes (33 with RAW)
 
 ### Size formula
 
-`total = 14 + (34 * (count - 1)) + 42 + gps + cell`
+`total = 22 + (2 + body) * count + gps + cell`
 
 Where:
 
+- `body = 19`, or `23` if the RAW flag is set
 - `gps = 8` if GPS flag is set, else `0`
 - `cell = 4` if Cell flag is set, else `0`
 
-For a deeper byte-by-byte guide, see `telemetry.md`.
+For a deeper byte-by-byte guide with a worked example, see `telemetry.md`. To explore the layout interactively, open `packet.html` in a browser.
 
 ## RabbitMQ Publish
 
@@ -154,6 +159,7 @@ See `rabbitmq.md` for full queue topology, dead-letter behavior, and message sch
 - `tools/` - the Docker image build helper (`go run -tags tools ./tools`)
 - `test.py` - sample TCP payload sender
 - `telemetry.md` - byte-level payload construction guide
+- `packet.html` - interactive packet builder (open in a browser)
 - `rabbitmq.md` - RabbitMQ topology, routing, and error/dead-letter details
 - `Dockerfile` - container build
 - `.dockerignore` - excludes local-only files from the Docker build context

@@ -6,11 +6,43 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strconv"
 
 	"ingest/internal/config"
 )
+
+// cursor reads little-endian values sequentially from a payload whose length
+// has already been validated, so reads never run past the end.
+type cursor struct {
+	buf []byte
+	pos int
+}
+
+func (c *cursor) u8() byte {
+	v := c.buf[c.pos]
+	c.pos++
+	return v
+}
+
+func (c *cursor) u16() uint16 {
+	v := binary.LittleEndian.Uint16(c.buf[c.pos:])
+	c.pos += 2
+	return v
+}
+
+func (c *cursor) i16() int16 { return int16(c.u16()) }
+
+func (c *cursor) i32() int32 {
+	v := int32(binary.LittleEndian.Uint32(c.buf[c.pos:]))
+	c.pos += 4
+	return v
+}
+
+func (c *cursor) u64() uint64 {
+	v := binary.LittleEndian.Uint64(c.buf[c.pos:])
+	c.pos += 8
+	return v
+}
 
 // Parse parses a complete, self-contained telemetry
 // payload (header + records + optional GPS/cell blocks).
@@ -44,6 +76,7 @@ func Parse(payload []byte) (*Data, error) {
 		return nil, fmt.Errorf("record count is zero")
 	}
 
+	hasRaw := flags&FlagRawPresent != 0
 	hasGPS := flags&FlagGPSPresent != 0
 	hasCell := flags&FlagCellPresent != 0
 
@@ -52,120 +85,43 @@ func Parse(payload []byte) (*Data, error) {
 		return nil, fmt.Errorf("payload size mismatch: received %d bytes, need %d for count=%d flags=0x%02x", len(payload), expectedSize, count, flags)
 	}
 
-	type rawRecord struct {
-		timedif     uint16
-		timestamp   uint64
-		temp        float64
-		humid       float64
-		pressure    float64
-		ch4Ppm      uint16
-		co2         uint16
-		offset      uint16
-		depth       uint16
-		moisturePct uint16
-		battP       uint16
-		battV       uint16
-		ch4Raw      uint16
-		moistureRaw uint16
-		status      byte
-		errorCode   byte
-	}
+	c := &cursor{buf: payload, pos: headerSize}
+	readings := make([]Reading, count)
+	var newestTimestamp uint64
 
-	bytesOffset := headerSize
-	rawRecords := make([]rawRecord, 0, count)
+	// Record field order must match buildTelemetryPayload() in the firmware.
 	for i := 0; i < count; i++ {
-		isNewest := i == count-1
-
-		timedif := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-
-		var timestamp uint64
-		if isNewest {
-			timestamp = binary.LittleEndian.Uint64(payload[bytesOffset : bytesOffset+8])
-			bytesOffset += 8
+		r := &readings[i]
+		r.TimeDifference = c.u16()
+		if i == count-1 {
+			newestTimestamp = c.u64()
 		}
-
-		temp := float64(math.Float32frombits(binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4])))
-		bytesOffset += 4
-		humid := float64(math.Float32frombits(binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4])))
-		bytesOffset += 4
-		pressure := float64(math.Float32frombits(binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4])))
-		bytesOffset += 4
-		ch4Ppm := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		co2 := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		offset := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		depth := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		moisturePct := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		battP := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		battV := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		ch4Raw := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		moistureRaw := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		status := payload[bytesOffset]
-		bytesOffset++
-		errorCode := payload[bytesOffset]
-		bytesOffset++
-
-		rawRecords = append(rawRecords, rawRecord{
-			timedif:     timedif,
-			timestamp:   timestamp,
-			temp:        temp,
-			humid:       humid,
-			pressure:    pressure,
-			ch4Ppm:      ch4Ppm,
-			co2:         co2,
-			ch4Raw:      ch4Raw,
-			offset:      offset,
-			depth:       depth,
-			moistureRaw: moistureRaw,
-			moisturePct: moisturePct,
-			battP:       battP,
-			battV:       battV,
-			status:      status,
-			errorCode:   errorCode,
-		})
+		r.Temperature = float64(c.i16()) / 100
+		r.Humidity = float64(c.u16()) / 100
+		r.Methane = c.u16()
+		r.CarbonDioxide = c.u16()
+		r.Offset = c.u16()
+		r.Depth = c.u16()
+		r.Moisture = float64(c.u16()) / 100
+		r.BatteryPercentage = float64(c.u16()) / 100
+		r.BatteryVoltage = c.u16()
+		if hasRaw {
+			methaneRaw, moistureRaw := c.u16(), c.u16()
+			r.MethaneRaw = &methaneRaw
+			r.MoistureRaw = &moistureRaw
+		}
+		r.Status = c.u8()
+		r.StatusFlags = decodeStatusFlags(r.Status)
 	}
 
-	newestTimestamp := rawRecords[count-1].timestamp
-	timestamps := make([]uint64, count)
-	timestamps[count-1] = newestTimestamp
-
+	// Rebuild older timestamps by walking timedif back from the newest one.
+	readings[count-1].Timestamp = newestTimestamp
 	for i := count - 2; i >= 0; i-- {
-		if uint64(rawRecords[i].timedif) > timestamps[i+1] {
+		next := readings[i+1].Timestamp
+		if uint64(readings[i].TimeDifference) > next {
 			return nil, fmt.Errorf("timedif underflows timestamp reconstruction at record %d", i)
 		}
-		timestamps[i] = timestamps[i+1] - uint64(rawRecords[i].timedif)
-	}
-
-	readings := make([]Reading, count)
-	for i, r := range rawRecords {
-		readings[i] = Reading{
-			Timestamp:         timestamps[i],
-			TimeDifference:    r.timedif,
-			Temperature:       r.temp,
-			Humidity:          r.humid,
-			Pressure:          r.pressure,
-			CarbonDioxide:     r.co2,
-			MethaneRaw:        r.ch4Raw,
-			Methane:           r.ch4Ppm,
-			Offset:            r.offset,
-			Depth:             r.depth,
-			MoistureRaw:       r.moistureRaw,
-			Moisture:          float64(r.moisturePct) / 100,
-			BatteryVoltage:    r.battV,
-			BatteryPercentage: float64(r.battP) / 100,
-			Status:            r.status,
-			StatusFlags:       decodeStatusFlags(r.status),
-			ErrorCode:         r.errorCode,
-		}
+		readings[i].Timestamp = next - uint64(readings[i].TimeDifference)
 	}
 
 	data := &Data{
@@ -173,26 +129,21 @@ func Parse(payload []byte) (*Data, error) {
 		Version:  versionText,
 		Flags:    flags,
 		Readings: readings,
+		HasRaw:   hasRaw,
 		HasGPS:   hasGPS,
 		HasCell:  hasCell,
 	}
 
 	if hasGPS {
-		lat := int32(binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4]))
-		bytesOffset += 4
-		lon := int32(binary.LittleEndian.Uint32(payload[bytesOffset : bytesOffset+4]))
-		bytesOffset += 4
-		latitude := float64(lat) / 10000000
-		longitude := float64(lon) / 10000000
+		latitude := float64(c.i32()) / 10000000
+		longitude := float64(c.i32()) / 10000000
 		data.Latitude = &latitude
 		data.Longitude = &longitude
 	}
 
 	if hasCell {
-		mcc := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
-		mnc := binary.LittleEndian.Uint16(payload[bytesOffset : bytesOffset+2])
-		bytesOffset += 2
+		mcc := c.u16()
+		mnc := c.u16()
 		data.MobileCountryCode = &mcc
 		data.MobileNetworkCode = &mnc
 	}

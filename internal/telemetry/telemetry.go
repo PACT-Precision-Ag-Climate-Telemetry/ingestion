@@ -18,6 +18,7 @@ var telemetryStatusFlagNames = [8]string{
 	2: "temperature_read_failed",
 	3: "methane_read_failed",
 	4: "co2_read_failed",
+	5: "moisture_read_failed",
 }
 
 // decodeStatusFlags expands the raw status byte into names. Bits the firmware
@@ -40,24 +41,25 @@ func decodeStatusFlags(status byte) []string {
 
 // Reading is a single sample within a telemetry payload. Payloads
 // carry multiple readings (oldest to newest) in one message.
+//
+// MethaneRaw and MoistureRaw are only on the wire when the payload sets
+// FlagRawPresent (flags bit 5); otherwise they are nil and omitted from JSON.
 type Reading struct {
 	Timestamp         uint64   `json:"timestamp"`
 	TimeDifference    uint16   `json:"timedif"`
 	Temperature       float64  `json:"temperature"`
 	Humidity          float64  `json:"humidity"`
-	Pressure          float64  `json:"pressure"`
 	CarbonDioxide     uint16   `json:"carbon_dioxide"`
-	MethaneRaw        uint16   `json:"methane_raw"`
+	MethaneRaw        *uint16  `json:"methane_raw,omitempty"`
 	Methane           uint16   `json:"methane"`
 	Offset            uint16   `json:"offset"`
 	Depth             uint16   `json:"depth"`
-	MoistureRaw       uint16   `json:"moisture_raw"`
+	MoistureRaw       *uint16  `json:"moisture_raw,omitempty"`
 	Moisture          float64  `json:"moisture"`
 	BatteryVoltage    uint16   `json:"battery_voltage"`
 	BatteryPercentage float64  `json:"battery_percentage"`
 	Status            byte     `json:"status"`
 	StatusFlags       []string `json:"status_flags"`
-	ErrorCode         byte     `json:"error_code"`
 }
 
 // The optional location fields are pointers so that a legitimate zero value
@@ -69,6 +71,7 @@ type Data struct {
 	Version           string    `json:"version"`
 	Flags             byte      `json:"flags"`
 	Readings          []Reading `json:"readings"` // oldest to newest
+	HasRaw            bool      `json:"has_raw"`
 	HasGPS            bool      `json:"has_gps"`
 	Latitude          *float64  `json:"latitude,omitempty"`
 	Longitude         *float64  `json:"longitude,omitempty"`

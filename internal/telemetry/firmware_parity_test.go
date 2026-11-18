@@ -11,10 +11,16 @@ import (
 // silently misaligned fields in production telemetry.
 //
 // Keep the append order below identical to the firmware.
+//
+// Wire format change (int16/uint16 x100 temperature/humidity, no pressure, no
+// error_code, *_raw gated by flags bit 5): this transcription was updated
+// ahead of the firmware. buildTelemetryPayload() in tcp.h must be changed to
+// match it before devices running the old layout are pointed at this service.
 
 const (
 	fwPayloadVersion  byte = 0
 	fwFlagVersionMask byte = 0x0F
+	fwFlagWithRaw     byte = 1 << 5
 	fwFlagWithCell    byte = 1 << 6
 	fwFlagWithGPS     byte = 1 << 7
 	fwMaxReadings          = 24
@@ -25,7 +31,6 @@ type fwReading struct {
 	timestamp         uint64
 	temperature       float32
 	humidity          float32
-	pressure          float32
 	carbonDioxide     uint16
 	methaneRaw        uint16
 	methane           uint16
@@ -36,7 +41,6 @@ type fwReading struct {
 	batteryVoltage    uint16
 	batteryPercentage uint16 // centi-percent
 	status            byte
-	errorCode         byte
 }
 
 // fwLocation mirrors the firmware's LocationInfo struct.
@@ -58,16 +62,21 @@ func fwEncodePercentTimes100(value uint16) uint16 {
 	return value
 }
 
+// fwEncodeTimes100 scales a float reading to the fixed-point x100 wire value,
+// rounding to the nearest hundredth.
+func fwEncodeTimes100(value float32) float64 {
+	return math.Round(float64(value) * 100)
+}
+
 // fwEncodeCoordinateScaled mirrors encodeCoordinateScaled(), including the
 // float32 arithmetic the firmware performs before rounding.
 func fwEncodeCoordinateScaled(degrees float32) int32 {
 	return int32(math.Round(float64(degrees * 1e7)))
 }
 
-func fwAppendSensorBody(dst []byte, r fwReading) []byte {
-	dst = appendFloat32(dst, r.temperature)
-	dst = appendFloat32(dst, r.humidity)
-	dst = appendFloat32(dst, r.pressure)
+func fwAppendSensorBody(dst []byte, r fwReading, withRaw bool) []byte {
+	dst = appendInt16(dst, int16(fwEncodeTimes100(r.temperature)))
+	dst = appendUint16(dst, uint16(fwEncodeTimes100(r.humidity)))
 	dst = appendUint16(dst, r.methane)
 	dst = appendUint16(dst, r.carbonDioxide)
 	dst = appendUint16(dst, r.offset)
@@ -75,13 +84,15 @@ func fwAppendSensorBody(dst []byte, r fwReading) []byte {
 	dst = appendUint16(dst, fwEncodePercentTimes100(r.moisture))
 	dst = appendUint16(dst, fwEncodePercentTimes100(r.batteryPercentage))
 	dst = appendUint16(dst, r.batteryVoltage)
-	dst = appendUint16(dst, r.methaneRaw)
-	dst = appendUint16(dst, r.moistureRaw)
-	return append(dst, r.status, r.errorCode)
+	if withRaw {
+		dst = appendUint16(dst, r.methaneRaw)
+		dst = appendUint16(dst, r.moistureRaw)
+	}
+	return append(dst, r.status)
 }
 
 // fwBuildTelemetryPayload transcribes buildTelemetryPayload() from tcp.h.
-func fwBuildTelemetryPayload(readings []fwReading, location fwLocation, magic1, magic2 byte, deviceID string) []byte {
+func fwBuildTelemetryPayload(readings []fwReading, location fwLocation, withRaw bool, magic1, magic2 byte, deviceID string) []byte {
 	if len(readings) == 0 {
 		return nil
 	}
@@ -89,6 +100,9 @@ func fwBuildTelemetryPayload(readings []fwReading, location fwLocation, magic1, 
 	payload := []byte{magic1, magic2}
 
 	flag := fwPayloadVersion & fwFlagVersionMask
+	if withRaw {
+		flag |= fwFlagWithRaw
+	}
 	if location.hasCellInfo {
 		flag |= fwFlagWithCell
 	}
@@ -118,7 +132,7 @@ func fwBuildTelemetryPayload(readings []fwReading, location fwLocation, magic1, 
 	// Historical records: timedif is the gap to the NEXT NEWER reading.
 	for i := 0; i+1 < len(readings); i++ {
 		payload = appendUint16(payload, clampDiff(readings[i+1].timestamp, readings[i].timestamp))
-		payload = fwAppendSensorBody(payload, readings[i])
+		payload = fwAppendSensorBody(payload, readings[i], withRaw)
 	}
 
 	// Newest record: the firmware writes the gap to the PREVIOUS OLDER reading
@@ -130,7 +144,7 @@ func fwBuildTelemetryPayload(readings []fwReading, location fwLocation, magic1, 
 	}
 	payload = appendUint16(payload, newestTimedif)
 	payload = appendUint64(payload, newest.timestamp)
-	payload = fwAppendSensorBody(payload, newest)
+	payload = fwAppendSensorBody(payload, newest, withRaw)
 
 	if location.hasFix {
 		payload = appendInt32(payload, fwEncodeCoordinateScaled(location.latitude))
@@ -151,22 +165,22 @@ func TestFirmwarePayloadRoundTrip(t *testing.T) {
 	base := uint64(1_756_512_000)
 	readings := []fwReading{
 		{
-			timestamp: base, temperature: 28.5, humidity: 65.25, pressure: 1012.75,
+			timestamp: base, temperature: 28.5, humidity: 65.25,
 			carbonDioxide: 420, methaneRaw: 123, methane: 45, offset: 67, distance: 89,
 			moistureRaw: 321, moisture: 5425, batteryVoltage: 3700, batteryPercentage: 8500,
-			status: 0, errorCode: 0,
+			status: 0,
 		},
 		{
-			timestamp: base + 300, temperature: 29.75, humidity: 66.5, pressure: 1013.5,
+			timestamp: base + 300, temperature: -3.75, humidity: 66.5,
 			carbonDioxide: 430, methaneRaw: 130, methane: 50, offset: 70, distance: 95,
 			moistureRaw: 333, moisture: 5500, batteryVoltage: 3720, batteryPercentage: 9000,
-			status: 0, errorCode: 0,
+			status: 0,
 		},
 		{
-			timestamp: base + 600, temperature: 30.0, humidity: 67.0, pressure: 1014.0,
+			timestamp: base + 600, temperature: 30.0, humidity: 67.0,
 			carbonDioxide: 440, methaneRaw: 140, methane: 55, offset: 72, distance: 99,
 			moistureRaw: 340, moisture: 5600, batteryVoltage: 3730, batteryPercentage: 9100,
-			status: 0x0A, errorCode: 7,
+			status: 0x0A,
 		},
 	}
 	location := fwLocation{
@@ -174,7 +188,7 @@ func TestFirmwarePayloadRoundTrip(t *testing.T) {
 		mobileCountryCode: 520, mobileNetworkCode: 1, hasCellInfo: true,
 	}
 
-	payload := fwBuildTelemetryPayload(readings, location, 0x1A, 0x2B, "TESMBO0001")
+	payload := fwBuildTelemetryPayload(readings, location, true, 0x1A, 0x2B, "TESMBO0001")
 
 	wantSize := headerSize + expectedRemainingSize(len(readings), payload[2])
 	if len(payload) != wantSize {
@@ -207,17 +221,14 @@ func TestFirmwarePayloadRoundTrip(t *testing.T) {
 		if math.Abs(got.Humidity-float64(want.humidity)) > 1e-4 {
 			t.Errorf("reading %d: humidity = %v, want %v", i, got.Humidity, want.humidity)
 		}
-		if math.Abs(got.Pressure-float64(want.pressure)) > 1e-3 {
-			t.Errorf("reading %d: pressure = %v, want %v", i, got.Pressure, want.pressure)
-		}
 		if got.CarbonDioxide != want.carbonDioxide {
 			t.Errorf("reading %d: carbon_dioxide = %d, want %d", i, got.CarbonDioxide, want.carbonDioxide)
 		}
 		if got.Methane != want.methane {
 			t.Errorf("reading %d: methane = %d, want %d", i, got.Methane, want.methane)
 		}
-		if got.MethaneRaw != want.methaneRaw {
-			t.Errorf("reading %d: methane_raw = %d, want %d", i, got.MethaneRaw, want.methaneRaw)
+		if got.MethaneRaw == nil || *got.MethaneRaw != want.methaneRaw {
+			t.Errorf("reading %d: methane_raw = %v, want %d", i, got.MethaneRaw, want.methaneRaw)
 		}
 		if got.Offset != want.offset {
 			t.Errorf("reading %d: offset = %d, want %d", i, got.Offset, want.offset)
@@ -225,8 +236,8 @@ func TestFirmwarePayloadRoundTrip(t *testing.T) {
 		if got.Depth != want.distance {
 			t.Errorf("reading %d: depth = %d, want firmware distance %d", i, got.Depth, want.distance)
 		}
-		if got.MoistureRaw != want.moistureRaw {
-			t.Errorf("reading %d: moisture_raw = %d, want %d", i, got.MoistureRaw, want.moistureRaw)
+		if got.MoistureRaw == nil || *got.MoistureRaw != want.moistureRaw {
+			t.Errorf("reading %d: moisture_raw = %v, want %d", i, got.MoistureRaw, want.moistureRaw)
 		}
 		if math.Abs(got.Moisture-float64(want.moisture)/100) > 1e-9 {
 			t.Errorf("reading %d: moisture = %v, want %v", i, got.Moisture, float64(want.moisture)/100)
@@ -240,13 +251,10 @@ func TestFirmwarePayloadRoundTrip(t *testing.T) {
 		if got.Status != want.status {
 			t.Errorf("reading %d: status = %d, want %d", i, got.Status, want.status)
 		}
-		if got.ErrorCode != want.errorCode {
-			t.Errorf("reading %d: error_code = %d, want %d", i, got.ErrorCode, want.errorCode)
-		}
 	}
 
-	if !data.HasGPS || !data.HasCell {
-		t.Fatalf("expected gps and cell blocks: %+v", data)
+	if !data.HasRaw || !data.HasGPS || !data.HasCell {
+		t.Fatalf("expected raw, gps and cell blocks: %+v", data)
 	}
 }
 
@@ -262,7 +270,7 @@ func TestFirmwareMaxBatchRoundTrip(t *testing.T) {
 		readings[i] = fwReading{timestamp: base + uint64(i)*300, temperature: float32(20 + i)}
 	}
 
-	payload := fwBuildTelemetryPayload(readings, fwLocation{}, 0x1A, 0x2B, "TESMBO0001")
+	payload := fwBuildTelemetryPayload(readings, fwLocation{}, false, 0x1A, 0x2B, "TESMBO0001")
 	data, err := Parse(payload)
 	if err != nil {
 		t.Fatalf("Parse rejected a max-size firmware batch: %v", err)
@@ -283,10 +291,10 @@ func TestFirmwareSingleReadingRoundTrip(t *testing.T) {
 	t.Setenv("magic_byte_2", "0x2B")
 
 	readings := []fwReading{{timestamp: 1_756_512_000, temperature: 25.5, distance: 940}}
-	payload := fwBuildTelemetryPayload(readings, fwLocation{}, 0x1A, 0x2B, "TESMBO0001")
+	payload := fwBuildTelemetryPayload(readings, fwLocation{}, false, 0x1A, 0x2B, "TESMBO0001")
 
-	if len(payload) != headerSize+newestRecordBaseSize {
-		t.Fatalf("single-reading payload is %d bytes, want %d", len(payload), headerSize+newestRecordBaseSize)
+	if len(payload) != headerSize+newestRecordSize(0) {
+		t.Fatalf("single-reading payload is %d bytes, want %d", len(payload), headerSize+newestRecordSize(0))
 	}
 
 	data, err := Parse(payload)

@@ -7,12 +7,13 @@ from typing import Optional
 
 
 HEADER_SIZE = 14           # magic(2) + flags/version(1) + id(10) + count(1)
-OLD_RECORD_SIZE = 34       # timedif(2) + fixed body(32)
-NEWEST_RECORD_SIZE = 42    # timedif(2) + timestamp(8) + fixed body(32)
+SENSOR_BASE_SIZE = 19      # temp, humid, ch4, co2, offset, depth, moisture, batt_p, batt_v (2 each) + status (1)
+RAW_FIELDS_SIZE = 4        # methane_raw + moisture_raw, only when FLAG_RAW_PRESENT is set
 GPS_BLOCK_SIZE = 8         # latitude(4) + longitude(4)
 CELL_BLOCK_SIZE = 4        # mcc(2) + mnc(2)
 
 FLAG_VERSION_MASK = 0x0F
+FLAG_RAW_PRESENT = 1 << 5
 FLAG_CELL_PRESENT = 1 << 6
 FLAG_GPS_PRESENT = 1 << 7
 
@@ -23,9 +24,10 @@ def parse_int(value: Optional[str], default: str) -> int:
 
 
 def expected_size(count: int, flags: int) -> int:
-    size = HEADER_SIZE
-    for i in range(count):
-        size += NEWEST_RECORD_SIZE if i == count - 1 else OLD_RECORD_SIZE
+    sensor = SENSOR_BASE_SIZE + (RAW_FIELDS_SIZE if flags & FLAG_RAW_PRESENT else 0)
+    historical = 2 + sensor      # timedif + sensor body
+    newest = 2 + 8 + sensor      # timedif + timestamp + sensor body
+    size = HEADER_SIZE + newest + historical * (count - 1)
     if flags & FLAG_GPS_PRESENT:
         size += GPS_BLOCK_SIZE
     if flags & FLAG_CELL_PRESENT:
@@ -34,29 +36,28 @@ def expected_size(count: int, flags: int) -> int:
 
 
 def build_record(is_newest: bool, args: argparse.Namespace, timestamp: int, timedif: int) -> bytes:
-    time_fields = [struct.pack("<H", timedif)]
+    fields = [struct.pack("<H", timedif)]
     if is_newest:
-        time_fields.append(struct.pack("<Q", timestamp))
+        fields.append(struct.pack("<Q", timestamp))
 
-    return b"".join(
-        [
-            *time_fields,
-            struct.pack("<f", args.temperature),
-            struct.pack("<f", args.humidity),
-            struct.pack("<f", args.pressure),
-            struct.pack("<H", args.methane),
-            struct.pack("<H", args.carbon_dioxide),
-            struct.pack("<H", args.offset),
-            struct.pack("<H", args.distance),
-            struct.pack("<H", args.moisture),
-            struct.pack("<H", args.battery_percentage),
-            struct.pack("<H", args.battery_voltage),
+    fields += [
+        struct.pack("<h", round(args.temperature * 100)),  # int16, degC x100
+        struct.pack("<H", round(args.humidity * 100)),     # uint16, % x100
+        struct.pack("<H", args.methane),
+        struct.pack("<H", args.carbon_dioxide),
+        struct.pack("<H", args.offset),
+        struct.pack("<H", args.depth),
+        struct.pack("<H", args.moisture),
+        struct.pack("<H", args.battery_percentage),
+        struct.pack("<H", args.battery_voltage),
+    ]
+    if not args.no_raw:
+        fields += [
             struct.pack("<H", args.methane_raw),
             struct.pack("<H", args.moisture_raw),
-            bytes((args.status,)),
-            bytes((args.error_code,)),
         ]
-    )
+    fields.append(bytes((args.status,)))
+    return b"".join(fields)
 
 
 def build_payload(args: argparse.Namespace) -> bytes:
@@ -69,6 +70,8 @@ def build_payload(args: argparse.Namespace) -> bytes:
         raise ValueError("--version must fit in the low 4 bits (0-15)")
 
     flags = args.version & FLAG_VERSION_MASK
+    if not args.no_raw:
+        flags |= FLAG_RAW_PRESENT
     if not args.no_gps:
         flags |= FLAG_GPS_PRESENT
     if not args.no_cell:
@@ -143,20 +146,19 @@ def main() -> None:
     parser.add_argument("--mobile-country-code", type=int, default=520)
     parser.add_argument("--mobile-network-code", type=int, default=1)
 
-    parser.add_argument("--temperature", type=float, default=28.5)
-    parser.add_argument("--humidity", type=float, default=65.25)
-    parser.add_argument("--pressure", type=float, default=1012.75)
+    parser.add_argument("--no-raw", action="store_true", help="omit methane_raw/moisture_raw (clears flags bit 5)")
+    parser.add_argument("--temperature", type=float, default=28.5, help="degrees C, sent as int16 x100")
+    parser.add_argument("--humidity", type=float, default=65.25, help="percent, sent as uint16 x100")
     parser.add_argument("--carbon-dioxide", type=int, default=420)
     parser.add_argument("--methane-raw", type=int, default=123)
     parser.add_argument("--methane", type=int, default=45)
     parser.add_argument("--offset", type=int, default=67)
-    parser.add_argument("--distance", type=int, default=89)
+    parser.add_argument("--depth", type=int, default=89, help="millimetres")
     parser.add_argument("--moisture-raw", type=int, default=321)
     parser.add_argument("--moisture", type=int, default=5425, help="stored as hundredths of a percent")
     parser.add_argument("--battery-voltage", type=int, default=3700, help="stored as millivolts")
     parser.add_argument("--battery-percentage", type=int, default=8500, help="stored as hundredths of a percent")
     parser.add_argument("--status", type=int, default=0)
-    parser.add_argument("--error-code", type=int, default=0)
     args = parser.parse_args()
 
     payload = build_payload(args)

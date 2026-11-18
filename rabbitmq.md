@@ -57,7 +57,7 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
   "description": "Parsed telemetry published to the topic exchange RABBITMQ_TELEMETRY_EXCHANGE (default \"pact.telemetry\") with routing key pact.telemetry.{version-major}.{device-id}. Field order and units mirror buildTelemetryPayload() in the device firmware (tcp.h); firmware_parity_test.go enforces that.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "version", "flags", "readings", "has_gps", "has_cell"],
+  "required": ["id", "version", "flags", "readings", "has_raw", "has_gps", "has_cell"],
   "properties": {
     "id": {
       "type": "string",
@@ -73,7 +73,7 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
       "type": "integer",
       "minimum": 0,
       "maximum": 255,
-      "description": "Raw flags byte: bits 0-3 version, bits 4-5 reserved, bit 6 cell block present, bit 7 GPS block present"
+      "description": "Raw flags byte: bits 0-3 version, bit 4 reserved, bit 5 raw ADC fields present, bit 6 cell block present, bit 7 GPS block present"
     },
     "readings": {
       "type": "array",
@@ -81,6 +81,10 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
       "maxItems": 255,
       "description": "Sensor samples ordered oldest to newest. The firmware batches at most MAX_READINGS_PER_PAYLOAD (24) per message; the parser accepts up to the 255 the count byte allows",
       "items": { "$ref": "#/$defs/reading" }
+    },
+    "has_raw": {
+      "type": "boolean",
+      "description": "True when the payload carried methane_raw and moisture_raw in every record (flags bit 5). When false, both fields are absent from every reading"
     },
     "has_gps": {
       "type": "boolean",
@@ -111,6 +115,24 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": { "has_raw": { "const": true } },
+        "required": ["has_raw"]
+      },
+      "then": {
+        "properties": { "readings": { "items": { "required": ["methane_raw", "moisture_raw"] } } }
+      },
+      "else": {
+        "properties": {
+          "readings": {
+            "items": {
+              "not": { "anyOf": [{ "required": ["methane_raw"] }, { "required": ["moisture_raw"] }] }
+            }
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": { "has_gps": { "const": true } },
@@ -146,19 +168,15 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
         "timedif",
         "temperature",
         "humidity",
-        "pressure",
         "carbon_dioxide",
-        "methane_raw",
         "methane",
         "offset",
         "depth",
-        "moisture_raw",
         "moisture",
         "battery_voltage",
         "battery_percentage",
         "status",
-        "status_flags",
-        "error_code"
+        "status_flags"
       ],
       "properties": {
         "timestamp": {
@@ -174,13 +192,19 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
         },
         "temperature": {
           "type": "number",
-          "description": "Celsius. Widened from float32, so expect representation artifacts such as 23.100000381469727"
+          "minimum": -327.68,
+          "maximum": 327.67,
+          "description": "Celsius; wire value is int16 centi-degrees divided by 100, so always an exact hundredth"
         },
-        "humidity": { "type": "number", "description": "Percent (from float32)" },
-        "pressure": { "type": "number", "description": "hPa (from float32)" },
+        "humidity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 655.35,
+          "description": "Percent; wire value is uint16 centi-percent divided by 100"
+        },
         "carbon_dioxide": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "ppm" },
         "methane": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "ppm" },
-        "methane_raw": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Uncalibrated sensor count" },
+        "methane_raw": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Uncalibrated sensor count. Present only when has_raw is true" },
         "offset": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Millimetres" },
         "depth": {
           "type": "integer",
@@ -194,7 +218,7 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
           "maximum": 655.35,
           "description": "Percent; wire value is uint16 centi-percent divided by 100"
         },
-        "moisture_raw": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Uncalibrated sensor count" },
+        "moisture_raw": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Uncalibrated sensor count. Present only when has_raw is true" },
         "battery_voltage": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "Millivolts" },
         "battery_percentage": {
           "type": "number",
@@ -221,7 +245,8 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
                   "ultrasonic_read_failed",
                   "temperature_read_failed",
                   "methane_read_failed",
-                  "co2_read_failed"
+                  "co2_read_failed",
+                  "moisture_read_failed"
                 ]
               },
               {
@@ -230,12 +255,6 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
               }
             ]
           }
-        },
-        "error_code": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 255,
-          "description": "Opaque device error code; the firmware assigns no defined values at protocol v0"
         }
       }
     }
@@ -244,14 +263,13 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
     {
       "id": "ABC-DEF-1234",
       "version": "0",
-      "flags": 128,
+      "flags": 160,
       "readings": [
         {
           "timestamp": 1756512000,
           "timedif": 300,
-          "temperature": 23.100000381469727,
+          "temperature": 23.1,
           "humidity": 61.5,
-          "pressure": 1008.25,
           "carbon_dioxide": 412,
           "methane_raw": 1350,
           "methane": 8,
@@ -262,15 +280,13 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
           "battery_voltage": 3980,
           "battery_percentage": 87.25,
           "status": 0,
-          "status_flags": [],
-          "error_code": 0
+          "status_flags": []
         },
         {
           "timestamp": 1756512300,
           "timedif": 300,
           "temperature": 23.5,
           "humidity": 60.75,
-          "pressure": 1008.1,
           "carbon_dioxide": 418,
           "methane_raw": 1361,
           "methane": 9,
@@ -281,10 +297,10 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
           "battery_voltage": 3975,
           "battery_percentage": 87.1,
           "status": 2,
-          "status_flags": ["ultrasonic_read_failed"],
-          "error_code": 0
+          "status_flags": ["ultrasonic_read_failed"]
         }
       ],
+      "has_raw": true,
       "has_gps": true,
       "latitude": 13.7563,
       "longitude": 100.5018,
