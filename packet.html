@@ -192,9 +192,9 @@ pre{margin:0;font:12px/1.5 var(--mono);background:var(--bg);border:1px solid var
    PROTOCOL SPEC — edit here to change the wire format.
    Mirrors internal/telemetry/protocol.go + parse.go
    ===================================================================== */
-const SIZE = {u8:1, u16:2, i16:2, i32:4, u64:8, f32:4, ascii10:10};
-const TYPE_LABEL = {u8:'uint8', u16:'uint16 LE', i16:'int16 LE', i32:'int32 LE', u64:'uint64 LE', f32:'float32 LE', ascii10:'10 × ASCII'};
-const RANGE = {u8:[0,255], u16:[0,65535], i16:[-32768,32767], i32:[-2147483648,2147483647]};
+const SIZE = {i8:1, u8:1, u16:2, i16:2, i32:4, u64:8, f32:4, ascii10:10};
+const TYPE_LABEL = {i8:'int8', u8:'uint8', u16:'uint16 LE', i16:'int16 LE', i32:'int32 LE', u64:'uint64 LE', f32:'float32 LE', ascii10:'10 × ASCII'};
+const RANGE = {i8:[-128,127], u8:[0,255], u16:[0,65535], i16:[-32768,32767], i32:[-2147483648,2147483647]};
 
 const CATS = {
   magic:{label:'Magic'}, flags:{label:'Flags/version'}, id:{label:'Device ID'}, count:{label:'Count'},
@@ -202,9 +202,10 @@ const CATS = {
   batt:{label:'Battery'}, status:{label:'Status'}, gps:{label:'GPS'}, cell:{label:'Cell'}
 };
 
+const RESET_NAMES = ['unknown','power_on','external_pin','software','panic','interrupt_watchdog','task_watchdog','other_watchdog','deep_sleep_wake','brownout','sdio','usb','jtag','efuse','power_glitch','cpu_lockup'];
 const STATUS_BITS = ['battery_read_failed','ultrasonic_read_failed','temperature_read_failed','methane_read_failed','co2_read_failed','moisture_read_failed'];
 
-// Shared 32-byte sensor body (same order in historical and newest records)
+// Shared sensor body (same order in historical and newest records)
 const SENSOR = [
   {k:'temp',     name:'temperature',        t:'i16', cat:'env',   scale:100, unit:'°C', desc:'Air temperature °C × 100, signed (−327.68 … 327.67). Server divides by 100.'},
   {k:'humid',    name:'humidity',           t:'u16', cat:'env',   scale:100, unit:'%',  desc:'Relative humidity % × 100. Server divides by 100.'},
@@ -215,6 +216,7 @@ const SENSOR = [
   {k:'moist',    name:'moisture',           t:'u16', cat:'level', scale:100, unit:'%', desc:'Soil moisture × 100. Server divides by 100.'},
   {k:'battP',    name:'battery_percentage', t:'u16', cat:'batt',  scale:100, unit:'%', desc:'Battery percent × 100. Server divides by 100.'},
   {k:'battV',    name:'battery_voltage',    t:'u16', cat:'batt',  unit:'mV',  desc:'Battery voltage in millivolts.'},
+  {k:'espTemp',  name:'esp_temperature',    t:'i16', cat:'env',   scale:100, unit:'°C', desc:'ESP die (internal chip) temperature °C × 100, signed. Server divides by 100.'},
   {k:'ch4Raw',   name:'methane_raw',        t:'u16', cat:'gas',   raw:true, desc:'Raw methane ADC value. Only sent when flags bit 5 (RAW) = 1.'},
   {k:'moistRaw', name:'moisture_raw',       t:'u16', cat:'level', raw:true, desc:'Raw moisture ADC value. Only sent when flags bit 5 (RAW) = 1.'},
   {k:'status',   name:'status',             t:'u8',  cat:'status', bits:true, desc:'Sensor-health bitfield. Set bit = that read failed (value is the previous sample).'},];
@@ -226,13 +228,13 @@ const FLAG_VERSION_MASK = 0x0F, FLAG_RAW = 1<<5, FLAG_CELL = 1<<6, FLAG_GPS = 1<
    ===================================================================== */
 function defaultRecord(i){
   return {timedif:60, temp:2850+i*10, humid:7230-i*20, ch4:1890+i*3, co2:415+i,
-    offset:120, depth:450-i, moist:3650, battP:8700-i*5, battV:3950-i, ch4Raw:2048+i, moistRaw:1820, status:0};
+    offset:120, depth:450-i, moist:3650, battP:8700-i*5, battV:3950-i, espTemp:4125+i*5, ch4Raw:2048+i, moistRaw:1820, status:0};
 }
 const S = {
   magic1:0x1A, magic2:0x2B, version:0, reserved:0, raw:true, gps:true, cell:true,
   id:'ABCDEF1234', timestamp:Math.floor(Date.now()/1000),
   records:[defaultRecord(0), defaultRecord(1), defaultRecord(2)],
-  lat:13.7563, lon:100.5018, mcc:520, mnc:3, sel:2
+  lat:13.7563, lon:100.5018, mcc:520, mnc:3, sig:-85, rst:1, sel:2
 };
 const openBlocks = new Set(['hdr','r2']);
 let pinned = null; // field path
@@ -245,6 +247,7 @@ function clampInt(v, lo, hi){ v = Math.round(Number(v)); if(!isFinite(v)) v = 0;
 function enc(t, v){
   const dv = new DataView(new ArrayBuffer(SIZE[t]));
   switch(t){
+    case 'i8':  dv.setInt8(0, clampInt(v,-128,127)); break;
     case 'u8':  dv.setUint8(0, clampInt(v,0,255)); break;
     case 'u16': dv.setUint16(0, clampInt(v,0,65535), true); break;
     case 'i16': dv.setInt16(0, clampInt(v,-32768,32767), true); break;
@@ -256,7 +259,7 @@ function enc(t, v){
 }
 const hx = b => b.toString(16).toUpperCase().padStart(2,'0');
 const hexN = (n,w=4) => '0x'+n.toString(16).toUpperCase().padStart(w,'0');
-// Sensor body: 19 bytes always + 4 bytes (methane_raw, moisture_raw) when RAW is set
+// Sensor body: 21 bytes always + 4 bytes (methane_raw, moisture_raw) when RAW is set
 function bodySize(raw = S.raw){ return SENSOR.reduce((n,s) => n + (s.raw && !raw ? 0 : SIZE[s.t]), 0); }
 function flagsByte(){ return (S.version & 0x0F) | ((S.reserved & 1)<<4) | (S.raw?FLAG_RAW:0) | (S.cell?FLAG_CELL:0) | (S.gps?FLAG_GPS:0); }
 function idBytes(){
@@ -322,6 +325,9 @@ function build(){
     add(...C, {path:'mcc', name:'mobile_country_code', t:'u16', cat:'cell', value:S.mcc, bytes:enc('u16',S.mcc), shown:String(clampInt(S.mcc,0,65535)), desc:'MCC, e.g. 520 = Thailand.'});
     add(...C, {path:'mnc', name:'mobile_network_code', t:'u16', cat:'cell', value:S.mnc, bytes:enc('u16',S.mnc), shown:String(clampInt(S.mnc,0,65535)), desc:'MNC. 0 is a valid code.'});
   }
+  const TR = ['trailer','Trailer','status'];
+  add(...TR, {path:'sig', name:'signal_strength', t:'i8', cat:'status', value:S.sig, bytes:enc('i8',S.sig), shown:String(clampInt(S.sig,-128,127)), decoded:clampInt(S.sig,-128,127)+' dBm', desc:'Cellular RSSI in dBm, signed int8.'});
+  add(...TR, {path:'rst', name:'reset_reason', t:'u8', cat:'status', value:S.rst, bytes:enc('u8',S.rst), shown:String(clampInt(S.rst,0,255)), decoded:RESET_NAMES[clampInt(S.rst,0,255)]||('unknown_'+clampInt(S.rst,0,255)), desc:'ESP esp_reset_reason_t code (9 = brownout).'});
   const bytes = F.flatMap(f => f.bytes);
   const byteField = []; F.forEach(f => { for(let k=0;k<f.size;k++) byteField.push(f); });
   return {F, bytes, byteField};
@@ -386,6 +392,9 @@ function renderEditor(){
   if(S.cell) h += `<section class="card"><h2>Cell block <span class="hint">4 bytes</span></h2><div class="grid2">
       ${inp('mcc','mobile_country_code',S.mcc,{cat:'cell',meta:'u16'})}
       ${inp('mnc','mobile_network_code',S.mnc,{cat:'cell',meta:'u16'})}</div></section>`;
+  h += `<section class="card"><h2>Trailer <span class="hint">2 bytes, always present</span></h2><div class="grid2">
+      ${inp('sig','signal_strength',S.sig,{cat:'status',meta:'i8 dBm'})}
+      ${inp('rst','reset_reason',S.rst,{cat:'status',meta:'u8'})}</div></section>`;
   $('editor').innerHTML = h;
 }
 
@@ -417,7 +426,7 @@ function update(){
   const blocks = []; F.forEach(f => { const last = blocks[blocks.length-1]; if(!last || last.block !== f.block) blocks.push({block:f.block, label:f.blockLabel, cat:f.blockCat, offset:f.offset, size:0}); blocks[blocks.length-1].size += f.size; });
   model.blocks = blocks;
   $('map').innerHTML = blocks.map(b => {
-    const short = b.block==='hdr'?'Header':b.block==='gps'?'GPS':b.block==='cell'?'Cell':'R'+b.block.slice(1);
+    const short = b.block==='hdr'?'Header':b.block==='gps'?'GPS':b.block==='cell'?'Cell':b.block==='trailer'?'Trailer':'R'+b.block.slice(1);
     const cat = b.block==='hdr'?'magic':b.cat;
     return `<div class="seg c-${cat}" data-b="${b.block}" style="flex:${b.size} 0 0" title="${esc(b.label)} · ${b.size} B @ ${b.offset}">${short}<small>${b.size}B</small></div>`;
   }).join('');
@@ -499,7 +508,7 @@ function renderJSON(){
       for(let b=0;b<8;b++) if(st&(1<<b)) names.push(STATUS_BITS[b]||'unknown_bit_'+b);
       const o = {timestamp:rc.ts[i], timedif:u16(r.timedif), temperature:clampInt(r.temp,-32768,32767)/100, humidity:u16(r.humid)/100,
         carbon_dioxide:u16(r.co2), methane_raw:u16(r.ch4Raw), methane:u16(r.ch4), offset:u16(r.offset), depth:u16(r.depth),
-        moisture_raw:u16(r.moistRaw), moisture:u16(r.moist)/100, battery_voltage:u16(r.battV), battery_percentage:u16(r.battP)/100,
+        moisture_raw:u16(r.moistRaw), moisture:u16(r.moist)/100, battery_voltage:u16(r.battV), battery_percentage:u16(r.battP)/100, esp_temperature:clampInt(r.espTemp,-32768,32767)/100,
         status:st, status_flags:names};
       if(!S.raw){ delete o.methane_raw; delete o.moisture_raw; }
       return o;
@@ -510,6 +519,9 @@ function renderJSON(){
   if(S.gps){ out.latitude = Math.round(S.lat*1e7)/1e7; out.longitude = Math.round(S.lon*1e7)/1e7; }
   out.has_cell = S.cell;
   if(S.cell){ out.mobile_country_code = u16(S.mcc); out.mobile_network_code = u16(S.mnc); }
+  out.signal_strength = clampInt(S.sig,-128,127);
+  out.reset_reason = u8(S.rst);
+  out.reset_reason_name = RESET_NAMES[u8(S.rst)] || ('unknown_'+u8(S.rst));
   $('json').textContent = JSON.stringify(out, null, 2);
 }
 

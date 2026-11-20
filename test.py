@@ -7,10 +7,11 @@ from typing import Optional
 
 
 HEADER_SIZE = 14           # magic(2) + flags/version(1) + id(10) + count(1)
-SENSOR_BASE_SIZE = 19      # temp, humid, ch4, co2, offset, depth, moisture, batt_p, batt_v (2 each) + status (1)
+SENSOR_BASE_SIZE = 21      # temp, humid, ch4, co2, offset, depth, moisture, batt_p, batt_v, esp_temp (2 each) + status (1)
 RAW_FIELDS_SIZE = 4        # methane_raw + moisture_raw, only when FLAG_RAW_PRESENT is set
 GPS_BLOCK_SIZE = 8         # latitude(4) + longitude(4)
 CELL_BLOCK_SIZE = 4        # mcc(2) + mnc(2)
+TRAILER_SIZE = 2           # signal_strength(int8 dBm) + reset_reason(uint8), always last
 
 FLAG_VERSION_MASK = 0x0F
 FLAG_RAW_PRESENT = 1 << 5
@@ -32,7 +33,7 @@ def expected_size(count: int, flags: int) -> int:
         size += GPS_BLOCK_SIZE
     if flags & FLAG_CELL_PRESENT:
         size += CELL_BLOCK_SIZE
-    return size
+    return size + TRAILER_SIZE
 
 
 def build_record(is_newest: bool, args: argparse.Namespace, timestamp: int, timedif: int) -> bytes:
@@ -50,6 +51,7 @@ def build_record(is_newest: bool, args: argparse.Namespace, timestamp: int, time
         struct.pack("<H", args.moisture),
         struct.pack("<H", args.battery_percentage),
         struct.pack("<H", args.battery_voltage),
+        struct.pack("<h", round(args.esp_temperature * 100)),  # int16, ESP die degC x100
     ]
     if not args.no_raw:
         fields += [
@@ -112,7 +114,9 @@ def build_payload(args: argparse.Namespace) -> bytes:
     if not args.no_cell:
         cell_block = struct.pack("<H", args.mobile_country_code) + struct.pack("<H", args.mobile_network_code)
 
-    body = header + records + gps_block + cell_block
+    trailer = struct.pack("<bB", args.signal_strength, args.reset_reason)
+
+    body = header + records + gps_block + cell_block + trailer
 
     expected = expected_size(args.count, flags)
     if len(body) != expected:
@@ -146,8 +150,11 @@ def main() -> None:
     parser.add_argument("--mobile-country-code", type=int, default=520)
     parser.add_argument("--mobile-network-code", type=int, default=1)
 
+    parser.add_argument("--signal-strength", type=int, default=-85, help="cellular RSSI in dBm (int8), last-block trailer")
+    parser.add_argument("--reset-reason", type=int, default=1, help="esp_reset_reason_t code (uint8), 1=power_on 9=brownout")
     parser.add_argument("--no-raw", action="store_true", help="omit methane_raw/moisture_raw (clears flags bit 5)")
     parser.add_argument("--temperature", type=float, default=28.5, help="degrees C, sent as int16 x100")
+    parser.add_argument("--esp-temperature", type=float, default=41.25, help="ESP die temperature in degrees C, sent as int16 x100")
     parser.add_argument("--humidity", type=float, default=65.25, help="percent, sent as uint16 x100")
     parser.add_argument("--carbon-dioxide", type=int, default=420)
     parser.add_argument("--methane-raw", type=int, default=123)

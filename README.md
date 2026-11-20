@@ -99,6 +99,7 @@ The TCP payload is variable length and has this structure (all numbers little-en
 2. `count` records (oldest to newest)
 3. Optional GPS block (8 bytes when flag bit 7 is set)
 4. Optional Cell block (4 bytes when flag bit 6 is set)
+5. Trailer (2 bytes, always present): signal_strength (int8, cellular RSSI dBm), reset_reason (uint8, ESP `esp_reset_reason_t`)
 
 ### Header (14 bytes)
 
@@ -117,12 +118,12 @@ Flag/version byte layout:
 
 ### Records
 
-Sensor body (19 bytes, 23 with RAW): temperature (int16, degC x100), humidity
+Sensor body (21 bytes, 25 with RAW): temperature (int16, degC x100), humidity
 (uint16, % x100), methane, carbon_dioxide, offset, depth, moisture (x100),
-battery_percentage (x100), battery_voltage, [methane_raw, moisture_raw], status (uint8).
+battery_percentage (x100), battery_voltage, esp_temperature (int16, degC x100, ESP die), [methane_raw, moisture_raw], status (uint8).
 
-- Historical records (`count-1` entries): timedif (2 bytes) + sensor body = 21 bytes (25 with RAW)
-- Newest record (last entry): timedif (2) + absolute timestamp (8) + sensor body = 29 bytes (33 with RAW)
+- Historical records (`count-1` entries): timedif (2 bytes) + sensor body = 23 bytes (27 with RAW)
+- Newest record (last entry): timedif (2) + absolute timestamp (8) + sensor body = 31 bytes (35 with RAW)
 
 ### Size formula
 
@@ -130,7 +131,8 @@ battery_percentage (x100), battery_voltage, [methane_raw, moisture_raw], status 
 
 Where:
 
-- `body = 19`, or `23` if the RAW flag is set
+- `body = 21`, or `25` if the RAW flag is set
+- `trailer = 2` (always)
 - `gps = 8` if GPS flag is set, else `0`
 - `cell = 4` if Cell flag is set, else `0`
 

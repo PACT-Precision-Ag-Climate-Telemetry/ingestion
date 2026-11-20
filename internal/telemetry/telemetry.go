@@ -39,6 +39,35 @@ func decodeStatusFlags(status byte) []string {
 	return flags
 }
 
+// resetReasonNames mirrors esp_reset_reason_t in ESP-IDF.
+var resetReasonNames = [...]string{
+	0:  "unknown",
+	1:  "power_on",
+	2:  "external_pin",
+	3:  "software",
+	4:  "panic",
+	5:  "interrupt_watchdog",
+	6:  "task_watchdog",
+	7:  "other_watchdog",
+	8:  "deep_sleep_wake",
+	9:  "brownout",
+	10: "sdio",
+	11: "usb",
+	12: "jtag",
+	13: "efuse",
+	14: "power_glitch",
+	15: "cpu_lockup",
+}
+
+// resetReasonName names a reset reason code; codes newer than this table are
+// still reported rather than dropped.
+func resetReasonName(code byte) string {
+	if int(code) < len(resetReasonNames) {
+		return resetReasonNames[code]
+	}
+	return fmt.Sprintf("unknown_%d", code)
+}
+
 // Reading is a single sample within a telemetry payload. Payloads
 // carry multiple readings (oldest to newest) in one message.
 //
@@ -58,6 +87,7 @@ type Reading struct {
 	Moisture          float64  `json:"moisture"`
 	BatteryVoltage    uint16   `json:"battery_voltage"`
 	BatteryPercentage float64  `json:"battery_percentage"`
+	EspTemperature    float64  `json:"esp_temperature"`
 	Status            byte     `json:"status"`
 	StatusFlags       []string `json:"status_flags"`
 }
@@ -78,4 +108,7 @@ type Data struct {
 	HasCell           bool      `json:"has_cell"`
 	MobileCountryCode *uint16   `json:"mobile_country_code,omitempty"`
 	MobileNetworkCode *uint16   `json:"mobile_network_code,omitempty"`
+	SignalStrength    int8      `json:"signal_strength"` // cellular RSSI, dBm
+	ResetReason       byte      `json:"reset_reason"`
+	ResetReasonName   string    `json:"reset_reason_name"`
 }

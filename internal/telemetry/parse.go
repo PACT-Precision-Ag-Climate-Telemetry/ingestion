@@ -105,6 +105,7 @@ func Parse(payload []byte) (*Data, error) {
 		r.Moisture = float64(c.u16()) / 100
 		r.BatteryPercentage = float64(c.u16()) / 100
 		r.BatteryVoltage = c.u16()
+		r.EspTemperature = float64(c.i16()) / 100
 		if hasRaw {
 			methaneRaw, moistureRaw := c.u16(), c.u16()
 			r.MethaneRaw = &methaneRaw
@@ -147,6 +148,10 @@ func Parse(payload []byte) (*Data, error) {
 		data.MobileCountryCode = &mcc
 		data.MobileNetworkCode = &mnc
 	}
+
+	data.SignalStrength = int8(c.u8())
+	data.ResetReason = c.u8()
+	data.ResetReasonName = resetReasonName(data.ResetReason)
 
 	// Logged as JSON rather than %+v: the optional location fields are
 	// pointers, which %+v renders as addresses.

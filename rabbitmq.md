@@ -57,7 +57,7 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
   "description": "Parsed telemetry published to the topic exchange RABBITMQ_TELEMETRY_EXCHANGE (default \"pact.telemetry\") with routing key pact.telemetry.{version-major}.{device-id}. Field order and units mirror buildTelemetryPayload() in the device firmware (tcp.h); firmware_parity_test.go enforces that.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "version", "flags", "readings", "has_raw", "has_gps", "has_cell"],
+  "required": ["id", "version", "flags", "readings", "has_raw", "has_gps", "has_cell", "signal_strength", "reset_reason", "reset_reason_name"],
   "properties": {
     "id": {
       "type": "string",
@@ -112,6 +112,22 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
       "minimum": 0,
       "maximum": 65535,
       "description": "MNC 0 is a valid network code and is published as 0, not omitted"
+    },
+    "signal_strength": {
+      "type": "integer",
+      "minimum": -128,
+      "maximum": 127,
+      "description": "Cellular signal strength (RSSI) in dBm; wire value is a signed int8 in the always-present trailer"
+    },
+    "reset_reason": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255,
+      "description": "ESP reset reason, esp_reset_reason_t code from the always-present trailer"
+    },
+    "reset_reason_name": {
+      "type": "string",
+      "description": "Name for reset_reason: 0 unknown, 1 power_on, 2 external_pin, 3 software, 4 panic, 5 interrupt_watchdog, 6 task_watchdog, 7 other_watchdog, 8 deep_sleep_wake, 9 brownout, ...; codes beyond the table are published as unknown_<code>"
     }
   },
   "allOf": [
@@ -175,6 +191,7 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
         "moisture",
         "battery_voltage",
         "battery_percentage",
+        "esp_temperature",
         "status",
         "status_flags"
       ],
@@ -225,6 +242,12 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
           "minimum": 0,
           "maximum": 655.35,
           "description": "Percent; wire value is uint16 centi-percent divided by 100"
+        },
+        "esp_temperature": {
+          "type": "number",
+          "minimum": -327.68,
+          "maximum": 327.67,
+          "description": "Celsius, ESP die (internal chip) temperature; wire value is int16 centi-degrees divided by 100"
         },
         "status": {
           "type": "integer",
@@ -279,6 +302,7 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
           "moisture": 34.5,
           "battery_voltage": 3980,
           "battery_percentage": 87.25,
+          "esp_temperature": 41.25,
           "status": 0,
           "status_flags": []
         },
@@ -296,6 +320,7 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
           "moisture": 34.2,
           "battery_voltage": 3975,
           "battery_percentage": 87.1,
+          "esp_temperature": 41.5,
           "status": 2,
           "status_flags": ["ultrasonic_read_failed"]
         }
@@ -304,7 +329,10 @@ This is a copy of [`schemas/telemetry-data.schema.json`](schemas/telemetry-data.
       "has_gps": true,
       "latitude": 13.7563,
       "longitude": 100.5018,
-      "has_cell": false
+      "has_cell": false,
+      "signal_strength": -85,
+      "reset_reason": 9,
+      "reset_reason_name": "brownout"
     }
   ]
 }

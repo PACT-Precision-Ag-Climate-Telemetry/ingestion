@@ -20,6 +20,7 @@ type testSensor struct {
 	moisture    uint16
 	battP       uint16
 	battV       uint16
+	espTemp     int16 // ESP die degC x100
 	ch4Raw      uint16
 	moistureRaw uint16
 	status      byte
@@ -35,6 +36,7 @@ func appendTestSensor(dst []byte, s testSensor, withRaw bool) []byte {
 	dst = appendUint16(dst, s.moisture)
 	dst = appendUint16(dst, s.battP)
 	dst = appendUint16(dst, s.battV)
+	dst = appendInt16(dst, s.espTemp)
 	if withRaw {
 		dst = appendUint16(dst, s.ch4Raw)
 		dst = appendUint16(dst, s.moistureRaw)
@@ -58,24 +60,25 @@ func TestParseTelemetryPayloadNewFormat(t *testing.T) {
 	payload = appendUint16(payload, 300)
 	payload = appendTestSensor(payload, testSensor{
 		temp: 2850, humid: 6525, ch4: 45, co2: 420, offset: 67, depth: 89,
-		moisture: 5425, battP: 8500, battV: 3700, ch4Raw: 123, moistureRaw: 321, status: 0x01,
+		moisture: 5425, battP: 8500, battV: 3700, espTemp: 4125, ch4Raw: 123, moistureRaw: 321, status: 0x01,
 	}, true)
 
 	payload = appendUint16(payload, 300)
 	payload = appendUint64(payload, 1_723_000_000)
 	payload = appendTestSensor(payload, testSensor{
 		temp: 2975, humid: 6650, ch4: 50, co2: 430, offset: 70, depth: 95,
-		moisture: 5500, battP: 9000, battV: 3720, ch4Raw: 130, moistureRaw: 333, status: 0x03,
+		moisture: 5500, battP: 9000, battV: 3720, espTemp: -550, ch4Raw: 130, moistureRaw: 333, status: 0x03,
 	}, true)
 
 	payload = appendInt32(payload, 137563000)
 	payload = appendInt32(payload, 1005018000)
 	payload = appendUint16(payload, 520)
 	payload = appendUint16(payload, 1)
+	payload = appendTestTrailer(payload)
 
-	// 14 header + 25 historical + 33 newest + 8 GPS + 4 cell
-	if len(payload) != 84 {
-		t.Fatalf("test payload is %d bytes, want 84", len(payload))
+	// 14 header + 27 historical + 35 newest + 8 GPS + 4 cell + 2 trailer
+	if len(payload) != 90 {
+		t.Fatalf("test payload is %d bytes, want 90", len(payload))
 	}
 
 	data, err := Parse(payload)
@@ -121,6 +124,12 @@ func TestParseTelemetryPayloadNewFormat(t *testing.T) {
 	if newest.MethaneRaw == nil || *newest.MethaneRaw != 130 || newest.MoistureRaw == nil || *newest.MoistureRaw != 333 {
 		t.Fatalf("newest raw fields wrong: %+v", newest)
 	}
+	if old.EspTemperature != 41.25 || newest.EspTemperature != -5.5 {
+		t.Fatalf("esp temperature = %v/%v, want 41.25/-5.5", old.EspTemperature, newest.EspTemperature)
+	}
+	if data.SignalStrength != -85 || data.ResetReason != 9 || data.ResetReasonName != "brownout" {
+		t.Fatalf("trailer = %d dBm / %d %q, want -85 / 9 brownout", data.SignalStrength, data.ResetReason, data.ResetReasonName)
+	}
 	if old.Status != 0x01 || newest.Status != 0x03 {
 		t.Fatalf("status = %d/%d, want 1/3", old.Status, newest.Status)
 	}
@@ -150,9 +159,11 @@ func TestParseTelemetryPayloadWithoutRaw(t *testing.T) {
 	payload = appendUint64(payload, 1_723_000_000)
 	payload = appendTestSensor(payload, testSensor{temp: 2510, humid: 5010, battV: 3899, status: 0x00}, false)
 
-	// 14 header + 21 historical + 29 newest
-	if len(payload) != 64 {
-		t.Fatalf("test payload is %d bytes, want 64", len(payload))
+	payload = appendTestTrailer(payload)
+
+	// 14 header + 23 historical + 31 newest + 2 trailer
+	if len(payload) != 70 {
+		t.Fatalf("test payload is %d bytes, want 70", len(payload))
 	}
 
 	data, err := Parse(payload)
@@ -194,6 +205,7 @@ func TestParseTelemetryPayloadNegativeTemperature(t *testing.T) {
 	payload = appendUint16(payload, 0)
 	payload = appendUint64(payload, 1_723_000_000)
 	payload = appendTestSensor(payload, testSensor{temp: -1250}, false)
+	payload = appendTestTrailer(payload)
 
 	data, err := Parse(payload)
 	if err != nil {
@@ -214,6 +226,7 @@ func TestParseTelemetryPayloadRawFlagSizeMismatch(t *testing.T) {
 	payload = appendUint16(payload, 0)
 	payload = appendUint64(payload, 1_723_000_000)
 	payload = appendTestSensor(payload, testSensor{}, true) // ...but raw bytes present
+	payload = appendTestTrailer(payload)
 
 	if _, err := Parse(payload); err == nil || !strings.Contains(err.Error(), "payload size mismatch") {
 		t.Fatalf("Parse error = %v, want payload size mismatch", err)
@@ -235,6 +248,7 @@ func TestParseTelemetryPayloadKeepsZeroLocationValues(t *testing.T) {
 	payload = appendInt32(payload, 0)
 	payload = appendUint16(payload, 520)
 	payload = appendUint16(payload, 0)
+	payload = appendTestTrailer(payload)
 
 	data, err := Parse(payload)
 	if err != nil {

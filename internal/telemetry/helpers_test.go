@@ -22,6 +22,10 @@ func appendUint64(dst []byte, value uint64) []byte {
 	return append(dst, buf...)
 }
 
+func appendTestTrailer(dst []byte) []byte {
+	return append(dst, byte(0xAB), 9) // -85 dBm, brownout
+}
+
 func appendInt32(dst []byte, value int32) []byte {
 	buf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(buf, uint32(value))

@@ -14,26 +14,26 @@ One upload is one binary frame, sent as a single TCP write to port `8080`:
 
 ```text
 +----------+--------------------------+----------------+-----------+-----------+
-|  Header  |  Historical records      |  Newest record | GPS block | Cell block|
-|  14 B    |  (count - 1) x 21 / 25 B |  29 / 33 B     | 8 B, opt. | 4 B, opt. |
-+----------+--------------------------+----------------+-----------+-----------+
+|  Header  |  Historical records      |  Newest record | GPS block | Cell block| Trailer |
+|  14 B    |  (count - 1) x 23 / 27 B |  31 / 35 B     | 8 B, opt. | 4 B, opt. | 2 B     |
++----------+--------------------------+----------------+-----------+-----------+---------+
 ```
 
 - **Byte order:** every multi-byte number is **little-endian**.
 - **Record order:** records go **oldest first**, and the last record is the newest.
 - **What the flags control:** the flags byte in the header decides the length
   of each record (the RAW bit) and whether the GPS and Cell blocks follow.
-- **Record sizes:** "21 / 25" and "29 / 33" mean *without RAW / with RAW*.
+- **Record sizes:** "23 / 27" and "31 / 35" mean _without RAW / with RAW_.
 
 ## 1. Header (14 bytes)
 
-| Offset | Size | Field        | Type     | Notes |
-|-------:|-----:|--------------|----------|-------|
-| 0      | 1    | magic_byte_1 | uint8    | Must equal the server's `magic_byte_1` (e.g. `0x1A`) |
-| 1      | 1    | magic_byte_2 | uint8    | Must equal the server's `magic_byte_2` (e.g. `0x2B`) |
-| 2      | 1    | flags        | uint8    | Version and feature bits, see below |
-| 3      | 10   | device_id    | 10 ASCII | Exactly 10 bytes. Pad short IDs with `'0'`. Published as `XXX-XXX-XXXX` |
-| 13     | 1    | count        | uint8    | Number of records, 1–255 (the firmware sends at most 24) |
+| Offset | Size | Field        | Type     | Notes                                                                   |
+| -----: | ---: | ------------ | -------- | ----------------------------------------------------------------------- |
+|      0 |    1 | magic_byte_1 | uint8    | Must equal the server's `magic_byte_1` (e.g. `0x1A`)                    |
+|      1 |    1 | magic_byte_2 | uint8    | Must equal the server's `magic_byte_2` (e.g. `0x2B`)                    |
+|      2 |    1 | flags        | uint8    | Version and feature bits, see below                                     |
+|      3 |   10 | device_id    | 10 ASCII | Exactly 10 bytes. Pad short IDs with `'0'`. Published as `XXX-XXX-XXXX` |
+|     13 |    1 | count        | uint8    | Number of records, 1–255 (the firmware sends at most 24)                |
 
 ### Flags byte (offset 2)
 
@@ -44,13 +44,13 @@ One upload is one binary frame, sent as a single TCP write to port `8080`:
        +------+------+------+------+---------------+
 ```
 
-| Bit | Mask   | Name | Meaning when set |
-|----:|--------|------|------------------|
-| 0–3 | `0x0F` | version | Protocol version. **Must be `0`.** |
-| 4   | `0x10` | reserved | Send `0`. The server ignores it. |
-| 5   | `0x20` | RAW  | Every record carries `methane_raw` and `moisture_raw` (+4 B per record) |
-| 6   | `0x40` | CELL | A 4-byte Cell block follows the records |
-| 7   | `0x80` | GPS  | An 8-byte GPS block follows the records |
+| Bit | Mask   | Name     | Meaning when set                                                        |
+| --: | ------ | -------- | ----------------------------------------------------------------------- |
+| 0–3 | `0x0F` | version  | Protocol version. **Must be `0`.**                                      |
+|   4 | `0x10` | reserved | Send `0`. The server ignores it.                                        |
+|   5 | `0x20` | RAW      | Every record carries `methane_raw` and `moisture_raw` (+4 B per record) |
+|   6 | `0x40` | CELL     | A 4-byte Cell block follows the records                                 |
+|   7 | `0x80` | GPS      | An 8-byte GPS block follows the records                                 |
 
 Common values: `0x00` (nothing extra), `0x20` (raw only), `0xA0` (GPS + raw),
 `0xE0` (GPS + cell + raw).
@@ -61,39 +61,40 @@ Every record starts with `timedif`. The **newest record** (the last one) also
 carries the absolute `timestamp`. After that comes the sensor body, which is
 the same in every record.
 
-### Historical record: 21 B, or 25 B with RAW
+### Historical record: 23 B, or 27 B with RAW
 
-| Offset | Field | Type |
-|-------:|-------|------|
-| +0 | timedif | uint16 |
-| +2 | sensor body | 19 / 23 B |
+| Offset | Field       | Type      |
+| -----: | ----------- | --------- |
+|     +0 | timedif     | uint16    |
+|     +2 | sensor body | 21 / 25 B |
 
-### Newest record: 29 B, or 33 B with RAW
+### Newest record: 31 B, or 35 B with RAW
 
-| Offset | Field | Type |
-|-------:|-------|------|
-| +0  | timedif | uint16 |
-| +2  | timestamp | uint64, Unix seconds |
-| +10 | sensor body | 19 / 23 B |
+| Offset | Field       | Type                 |
+| -----: | ----------- | -------------------- |
+|     +0 | timedif     | uint16               |
+|     +2 | timestamp   | uint64, Unix seconds |
+|    +10 | sensor body | 21 / 25 B            |
 
-### Sensor body: 19 B, or 23 B with RAW
+### Sensor body: 21 B, or 25 B with RAW
 
-| Offset | Field              | Type   | Encoding |
-|-------:|--------------------|--------|----------|
-| +0  | temperature        | int16  | °C × 100, **signed** (−327.68 … 327.67). `28.50 °C → 2850`, `−3.75 °C → −375` |
-| +2  | humidity           | uint16 | % × 100. `65.25 % → 6525` |
-| +4  | methane            | uint16 | ppm |
-| +6  | carbon_dioxide     | uint16 | ppm |
-| +8  | offset             | uint16 | mm |
-| +10 | depth              | uint16 | mm (the firmware calls it `distance`) |
-| +12 | moisture           | uint16 | % × 100 |
-| +14 | battery_percentage | uint16 | % × 100 |
-| +16 | battery_voltage    | uint16 | mV |
-| +18 | methane_raw        | uint16 | raw ADC count. **Only if RAW is set** |
-| +20 | moisture_raw       | uint16 | raw ADC count. **Only if RAW is set** |
-| +18 / +22 | status       | uint8  | Sensor-health bits, see below |
+|    Offset | Field              | Type   | Encoding                                                                      |
+| --------: | ------------------ | ------ | ----------------------------------------------------------------------------- |
+|        +0 | temperature        | int16  | °C × 100, **signed** (−327.68 … 327.67). `28.50 °C → 2850`, `−3.75 °C → −375` |
+|        +2 | humidity           | uint16 | % × 100. `65.25 % → 6525`                                                     |
+|        +4 | methane            | uint16 | ppm                                                                           |
+|        +6 | carbon_dioxide     | uint16 | ppm                                                                           |
+|        +8 | offset             | uint16 | mm                                                                            |
+|       +10 | depth              | uint16 | mm (the firmware calls it `distance`)                                         |
+|       +12 | moisture           | uint16 | % × 100                                                                       |
+|       +14 | battery_percentage | uint16 | % × 100                                                                       |
+|       +16 | battery_voltage    | uint16 | mV                                                                            |
+|       +18 | esp_temperature    | int16  | ESP die temperature, °C × 100, **signed**. `41.25 °C → 4125`                  |
+|       +20 | methane_raw        | uint16 | raw ADC count. **Only if RAW is set**                                         |
+|       +22 | moisture_raw       | uint16 | raw ADC count. **Only if RAW is set**                                         |
+| +20 / +24 | status             | uint8  | Sensor-health bits, see below                                                 |
 
-If RAW is clear, `status` comes straight after `battery_voltage`, at +18.
+If RAW is clear, `status` comes straight after `esp_temperature`, at +20.
 
 Round to the nearest hundredth before you scale. In C, use
 `(int16_t)lroundf(t * 100)`. A plain cast truncates, so it turns `28.499` into
@@ -124,15 +125,15 @@ ts[i]       = ts[i+1] - timedif[i]      for i = count-2 … 0
 A set bit means that sensor's read failed. The value in the record is then the
 previous sample carried over, not a fresh measurement.
 
-| Bit | Mask   | Name |
-|----:|--------|------|
-| 0 | `0x01` | battery_read_failed |
-| 1 | `0x02` | ultrasonic_read_failed |
-| 2 | `0x04` | temperature_read_failed |
-| 3 | `0x08` | methane_read_failed |
-| 4 | `0x10` | co2_read_failed |
-| 5 | `0x20` | moisture_read_failed |
-| 6–7 | | unassigned. Published as `unknown_bit_<n>` |
+| Bit | Mask   | Name                                       |
+| --: | ------ | ------------------------------------------ |
+|   0 | `0x01` | battery_read_failed                        |
+|   1 | `0x02` | ultrasonic_read_failed                     |
+|   2 | `0x04` | temperature_read_failed                    |
+|   3 | `0x08` | methane_read_failed                        |
+|   4 | `0x10` | co2_read_failed                            |
+|   5 | `0x20` | moisture_read_failed                       |
+| 6–7 |        | unassigned. Published as `unknown_bit_<n>` |
 
 ## 3. Optional trailing blocks
 
@@ -140,31 +141,38 @@ These go after the newest record, in this order.
 
 **GPS block (8 B), only if flags bit 7 is set**
 
-| Offset | Field | Type | Encoding |
-|-------:|-------|------|----------|
-| +0 | latitude  | int32 | degrees × 10,000,000 |
-| +4 | longitude | int32 | degrees × 10,000,000 |
+| Offset | Field     | Type  | Encoding             |
+| -----: | --------- | ----- | -------------------- |
+|     +0 | latitude  | int32 | degrees × 10,000,000 |
+|     +4 | longitude | int32 | degrees × 10,000,000 |
 
 **Cell block (4 B), only if flags bit 6 is set**
 
-| Offset | Field | Type |
-|-------:|-------|------|
-| +0 | mobile_country_code | uint16 (e.g. 520 = Thailand) |
-| +2 | mobile_network_code | uint16. `0` is a valid MNC |
+| Offset | Field               | Type                         |
+| -----: | ------------------- | ---------------------------- |
+|     +0 | mobile_country_code | uint16 (e.g. 520 = Thailand) |
+|     +2 | mobile_network_code | uint16. `0` is a valid MNC   |
+
+**Trailer (2 B), always present, always last**
+
+| Offset | Field           | Type  | Encoding                                                                                                                                                                                                                           |
+| -----: | --------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|     +0 | signal_strength | int8  | Cellular RSSI in dBm, signed. `-85 dBm → 0xAB`                                                                                                                                                                                     |
+|     +1 | reset_reason    | uint8 | ESP-IDF `esp_reset_reason_t`: 0 unknown, 1 power*on, 2 external_pin, 3 software, 4 panic, 5 interrupt_watchdog, 6 task_watchdog, 7 other_watchdog, 8 deep_sleep_wake, 9 brownout. Anything higher is published as `unknown*<code>` |
 
 ## 4. Frame size
 
 ```text
-body     = 19 + (RAW ? 4 : 0)
-total    = 14 + (2 + body) × (count − 1) + (10 + body) + (GPS ? 8 : 0) + (CELL ? 4 : 0)
-         = 22 + (2 + body) × count + gps + cell
+body     = 21 + (RAW ? 4 : 0)
+total    = 14 + (2 + body) × (count − 1) + (10 + body) + (GPS ? 8 : 0) + (CELL ? 4 : 0) + 2
+         = 24 + (2 + body) × count + gps + cell
 ```
 
 | count | no extras | RAW | RAW + GPS | RAW + GPS + CELL |
-|------:|----------:|----:|----------:|-----------------:|
-| 1     | 43        | 47  | 55        | 59               |
-| 3     | 85        | 97  | 105       | 109              |
-| 24    | 526       | 622 | 630       | 634              |
+| ----: | --------: | --: | --------: | ---------------: |
+|     1 |        47 |  51 |        59 |               63 |
+|     3 |        93 | 105 |       113 |              117 |
+|    24 |       576 | 672 |       680 |              684 |
 
 The server reads the 14-byte header first. Then it uses `count` and `flags` to
 work out exactly how many more bytes to read. If the frame is shorter, the read
@@ -178,8 +186,9 @@ is rejected.
 3. For the newest reading, write `timedif`, then the 8-byte `timestamp`, then the sensor body.
 4. If GPS is set, append latitude and longitude.
 5. If CELL is set, append MCC and MNC.
-6. Check the length against the formula in section 4.
-7. Send the frame in one write, then wait for the 1-byte ack `0x00`. Clear the
+6. Append the 2-byte trailer: signal_strength (int8 dBm), then reset_reason (uint8).
+7. Check the length against the formula in section 4.
+8. Send the frame in one write, then wait for the 1-byte ack `0x00`. Clear the
    device buffer only after the ack arrives. No ack means the frame was rejected
    or not published, so keep the buffer and retry on the next upload.
 
@@ -280,18 +289,50 @@ The server publishes it as follows. Record 0's timestamp is rebuilt as
 
 ```json
 {
-  "id": "TES-MBO-0001", "version": "0", "flags": 160,
+  "id": "TES-MBO-0001",
+  "version": "0",
+  "flags": 160,
   "readings": [
-    { "timestamp": 1722999700, "timedif": 300, "temperature": 28.5, "humidity": 65.25,
-      "carbon_dioxide": 420, "methane_raw": 123, "methane": 45, "offset": 67, "depth": 940,
-      "moisture_raw": 321, "moisture": 54.25, "battery_voltage": 3700, "battery_percentage": 85,
-      "status": 0, "status_flags": [] },
-    { "timestamp": 1723000000, "timedif": 300, "temperature": -3.75, "humidity": 66.5,
-      "carbon_dioxide": 430, "methane_raw": 130, "methane": 50, "offset": 70, "depth": 938,
-      "moisture_raw": 333, "moisture": 55, "battery_voltage": 3720, "battery_percentage": 90,
-      "status": 2, "status_flags": ["ultrasonic_read_failed"] }
+    {
+      "timestamp": 1722999700,
+      "timedif": 300,
+      "temperature": 28.5,
+      "humidity": 65.25,
+      "carbon_dioxide": 420,
+      "methane_raw": 123,
+      "methane": 45,
+      "offset": 67,
+      "depth": 940,
+      "moisture_raw": 321,
+      "moisture": 54.25,
+      "battery_voltage": 3700,
+      "battery_percentage": 85,
+      "status": 0,
+      "status_flags": []
+    },
+    {
+      "timestamp": 1723000000,
+      "timedif": 300,
+      "temperature": -3.75,
+      "humidity": 66.5,
+      "carbon_dioxide": 430,
+      "methane_raw": 130,
+      "methane": 50,
+      "offset": 70,
+      "depth": 938,
+      "moisture_raw": 333,
+      "moisture": 55,
+      "battery_voltage": 3720,
+      "battery_percentage": 90,
+      "status": 2,
+      "status_flags": ["ultrasonic_read_failed"]
+    }
   ],
-  "has_raw": true, "has_gps": true, "latitude": 13.7563, "longitude": 100.5018, "has_cell": false
+  "has_raw": true,
+  "has_gps": true,
+  "latitude": 13.7563,
+  "longitude": 100.5018,
+  "has_cell": false
 }
 ```
 
@@ -315,12 +356,12 @@ The server sends no ack and logs the frame to `error_handler_queue` when:
 The earlier v0 layout used 34-byte and 42-byte records. A frame in that layout
 now fails with `payload size mismatch`.
 
-| Was | Now |
-|-----|-----|
-| temperature float32 (4 B) | int16 °C × 100 (2 B) |
-| humidity float32 (4 B) | uint16 % × 100 (2 B) |
-| pressure float32 (4 B) | removed |
+| Was                                   | Now                                     |
+| ------------------------------------- | --------------------------------------- |
+| temperature float32 (4 B)             | int16 °C × 100 (2 B)                    |
+| humidity float32 (4 B)                | uint16 % × 100 (2 B)                    |
+| pressure float32 (4 B)                | removed                                 |
 | methane_raw, moisture_raw always sent | sent only when flags bit 5 (RAW) is set |
-| error_code uint8 | removed |
-| flags bits 4–5 reserved | bit 5 = RAW, bit 4 reserved |
-| sensor body 32 B | 19 B (23 B with RAW) |
+| error_code uint8                      | removed                                 |
+| flags bits 4–5 reserved               | bit 5 = RAW, bit 4 reserved             |
+| sensor body 32 B                      | 19 B (23 B with RAW)                    |

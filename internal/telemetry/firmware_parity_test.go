@@ -40,6 +40,7 @@ type fwReading struct {
 	moisture          uint16 // centi-percent
 	batteryVoltage    uint16
 	batteryPercentage uint16 // centi-percent
+	espTemperature    float32
 	status            byte
 }
 
@@ -51,6 +52,8 @@ type fwLocation struct {
 	mobileCountryCode uint16
 	mobileNetworkCode uint16
 	hasCellInfo       bool
+	signalStrength    int8  // cellular RSSI, dBm
+	resetReason       uint8 // esp_reset_reason_t
 }
 
 // fwEncodePercentTimes100 mirrors encodePercentTimes100() in the firmware,
@@ -84,6 +87,7 @@ func fwAppendSensorBody(dst []byte, r fwReading, withRaw bool) []byte {
 	dst = appendUint16(dst, fwEncodePercentTimes100(r.moisture))
 	dst = appendUint16(dst, fwEncodePercentTimes100(r.batteryPercentage))
 	dst = appendUint16(dst, r.batteryVoltage)
+	dst = appendInt16(dst, int16(fwEncodeTimes100(r.espTemperature)))
 	if withRaw {
 		dst = appendUint16(dst, r.methaneRaw)
 		dst = appendUint16(dst, r.moistureRaw)
@@ -154,6 +158,7 @@ func fwBuildTelemetryPayload(readings []fwReading, location fwLocation, withRaw 
 		payload = appendUint16(payload, location.mobileCountryCode)
 		payload = appendUint16(payload, location.mobileNetworkCode)
 	}
+	payload = append(payload, byte(location.signalStrength), location.resetReason)
 
 	return payload
 }
@@ -167,25 +172,26 @@ func TestFirmwarePayloadRoundTrip(t *testing.T) {
 		{
 			timestamp: base, temperature: 28.5, humidity: 65.25,
 			carbonDioxide: 420, methaneRaw: 123, methane: 45, offset: 67, distance: 89,
-			moistureRaw: 321, moisture: 5425, batteryVoltage: 3700, batteryPercentage: 8500,
+			moistureRaw: 321, moisture: 5425, batteryVoltage: 3700, batteryPercentage: 8500, espTemperature: 41.25,
 			status: 0,
 		},
 		{
 			timestamp: base + 300, temperature: -3.75, humidity: 66.5,
 			carbonDioxide: 430, methaneRaw: 130, methane: 50, offset: 70, distance: 95,
-			moistureRaw: 333, moisture: 5500, batteryVoltage: 3720, batteryPercentage: 9000,
+			moistureRaw: 333, moisture: 5500, batteryVoltage: 3720, batteryPercentage: 9000, espTemperature: -5.5,
 			status: 0,
 		},
 		{
 			timestamp: base + 600, temperature: 30.0, humidity: 67.0,
 			carbonDioxide: 440, methaneRaw: 140, methane: 55, offset: 72, distance: 99,
-			moistureRaw: 340, moisture: 5600, batteryVoltage: 3730, batteryPercentage: 9100,
+			moistureRaw: 340, moisture: 5600, batteryVoltage: 3730, batteryPercentage: 9100, espTemperature: 43.0,
 			status: 0x0A,
 		},
 	}
 	location := fwLocation{
 		latitude: 13.7563, longitude: 100.5018, hasFix: true,
 		mobileCountryCode: 520, mobileNetworkCode: 1, hasCellInfo: true,
+		signalStrength: -85, resetReason: 9,
 	}
 
 	payload := fwBuildTelemetryPayload(readings, location, true, 0x1A, 0x2B, "TESMBO0001")
@@ -221,6 +227,9 @@ func TestFirmwarePayloadRoundTrip(t *testing.T) {
 		if math.Abs(got.Humidity-float64(want.humidity)) > 1e-4 {
 			t.Errorf("reading %d: humidity = %v, want %v", i, got.Humidity, want.humidity)
 		}
+		if math.Abs(got.EspTemperature-float64(want.espTemperature)) > 1e-4 {
+			t.Errorf("reading %d: esp_temperature = %v, want %v", i, got.EspTemperature, want.espTemperature)
+		}
 		if got.CarbonDioxide != want.carbonDioxide {
 			t.Errorf("reading %d: carbon_dioxide = %d, want %d", i, got.CarbonDioxide, want.carbonDioxide)
 		}
@@ -255,6 +264,9 @@ func TestFirmwarePayloadRoundTrip(t *testing.T) {
 
 	if !data.HasRaw || !data.HasGPS || !data.HasCell {
 		t.Fatalf("expected raw, gps and cell blocks: %+v", data)
+	}
+	if data.SignalStrength != location.signalStrength || data.ResetReason != location.resetReason {
+		t.Errorf("trailer = %d dBm / %d, want %d / %d", data.SignalStrength, data.ResetReason, location.signalStrength, location.resetReason)
 	}
 }
 
@@ -293,8 +305,8 @@ func TestFirmwareSingleReadingRoundTrip(t *testing.T) {
 	readings := []fwReading{{timestamp: 1_756_512_000, temperature: 25.5, distance: 940}}
 	payload := fwBuildTelemetryPayload(readings, fwLocation{}, false, 0x1A, 0x2B, "TESMBO0001")
 
-	if len(payload) != headerSize+newestRecordSize(0) {
-		t.Fatalf("single-reading payload is %d bytes, want %d", len(payload), headerSize+newestRecordSize(0))
+	if len(payload) != headerSize+newestRecordSize(0)+trailerSize {
+		t.Fatalf("single-reading payload is %d bytes, want %d", len(payload), headerSize+newestRecordSize(0)+trailerSize)
 	}
 
 	data, err := Parse(payload)

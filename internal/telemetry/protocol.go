@@ -20,10 +20,11 @@ const headerSize = 14
 
 // Shared per-record sensor payload (always present):
 // temp (int16, degC x100), humid, ch4_ppm, co2, offset, depth, moisture_pct,
-// batt_p, batt_v (uint16 each) = 18 bytes, then status (1 byte) => 19 bytes.
+// batt_p, batt_v, esp_temp (uint16 each, esp_temp is int16 degC x100 of the ESP
+// die) = 20 bytes, then status (1 byte) => 21 bytes.
 // When FlagRawPresent is set, ch4_raw + moisture_raw (uint16 each = 4 bytes)
-// sit between batt_v and status.
-const recordSensorBaseSize = 19
+// sit between esp_temp and status.
+const recordSensorBaseSize = 21
 const recordRawSize = 4
 
 // Historical records carry timedif + sensor payload; the newest record adds
@@ -35,6 +36,10 @@ const timestampSize = 8
 const gpsBlockSize = 8  // 4-byte latitude + 4-byte longitude
 const cellBlockSize = 4 // 2-byte MCC + 2-byte MNC
 
+// Fixed trailer, always last: int8 cellular signal strength (dBm) + uint8 ESP
+// reset reason (esp_reset_reason_t).
+const trailerSize = 2
+
 const (
 	flagVersionMask byte = 0x0F
 	FlagRawPresent  byte = 1 << 5
@@ -43,7 +48,7 @@ const (
 )
 
 // recordSensorSize is the per-record sensor payload size for the given flags:
-// 19 bytes, or 23 when the raw ADC fields are present.
+// 21 bytes, or 25 when the raw ADC fields are present.
 func recordSensorSize(flags byte) int {
 	if flags&FlagRawPresent != 0 {
 		return recordSensorBaseSize + recordRawSize
@@ -51,12 +56,12 @@ func recordSensorSize(flags byte) int {
 	return recordSensorBaseSize
 }
 
-// historicalRecordSize is 21 bytes (25 with raw fields).
+// historicalRecordSize is 23 bytes (27 with raw fields).
 func historicalRecordSize(flags byte) int {
 	return timedifSize + recordSensorSize(flags)
 }
 
-// newestRecordSize is 29 bytes (33 with raw fields).
+// newestRecordSize is 31 bytes (35 with raw fields).
 func newestRecordSize(flags byte) int {
 	return timedifSize + timestampSize + recordSensorSize(flags)
 }
@@ -99,5 +104,5 @@ func expectedRemainingSize(count int, flags byte) int {
 	if flags&FlagCellPresent != 0 {
 		size += cellBlockSize
 	}
-	return size
+	return size + trailerSize
 }
